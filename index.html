@@ -1,0 +1,2034 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sagemaker Feature store part 1 post read</title>
+<meta name="description" content="An interactive read on building the offline store of SageMaker Feature Store, point-in-time correctness, and the quiet failures along the way.">
+<style>
+:root{
+  --bg:#0a0a0b; --bg2:#111113; --card:#161618; --card2:#1e1e21;
+  --line:#2c2c30; --line2:#3d3d43;
+  --text:#ece9e2; --mut:#a6a6ac; --dim:#7b7b82;
+  --gold:#d4af37; --gold2:#f0d77a; --gold3:#8f7420; --goldbg:rgba(212,175,55,.10); --goldbg2:rgba(212,175,55,.18);
+  --serif:ui-serif,Georgia,"Times New Roman",serif;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth;scroll-padding-top:80px}
+@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}*{transition:none!important;animation:none!important}}
+body{margin:0;background:var(--bg);color:var(--text);font:17px/1.7 var(--sans);-webkit-font-smoothing:antialiased}
+a{color:var(--gold2);text-underline-offset:3px}
+a:hover{color:var(--gold)}
+:focus-visible{outline:2px solid var(--gold2);outline-offset:2px;border-radius:3px}
+.skip{position:absolute;left:-999px;top:8px;background:var(--gold);color:#000;padding:8px 14px;z-index:100;border-radius:6px}
+.skip:focus{left:8px}
+
+/* top bar */
+.top{position:sticky;top:0;z-index:60;background:rgba(10,10,11,.93);backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
+.top .in{max-width:1180px;margin:0 auto;padding:0 20px;height:56px;display:flex;align-items:center;justify-content:space-between;gap:12px}
+.brand{font:600 14px var(--sans);letter-spacing:.04em;color:var(--gold);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.menu{display:none;background:var(--card2);color:var(--text);border:1px solid var(--line2);border-radius:8px;padding:7px 12px;font:500 14px var(--sans);cursor:pointer}
+#bar{position:absolute;left:0;bottom:-1px;height:3px;width:0;background:linear-gradient(90deg,var(--gold3),var(--gold2))}
+
+/* layout */
+.wrap{max-width:1180px;margin:0 auto;padding:0 20px;display:grid;grid-template-columns:220px minmax(0,1fr);gap:56px}
+nav#toc{position:sticky;top:84px;align-self:start;max-height:calc(100vh - 100px);overflow:auto;padding:28px 0 0;font-size:14px}
+nav#toc h2{font:600 11px var(--sans);letter-spacing:.14em;text-transform:uppercase;color:var(--dim);margin:0 0 12px}
+nav#toc ol{list-style:none;margin:0;padding:0;border-left:1px solid var(--line)}
+nav#toc a{display:block;padding:6px 0 6px 14px;margin-left:-1px;border-left:2px solid transparent;color:var(--mut);text-decoration:none;line-height:1.35}
+nav#toc a:hover{color:var(--text)}
+nav#toc a.on{color:var(--gold2);border-left-color:var(--gold)}
+main{min-width:0;padding-bottom:40px}
+@media (max-width:1080px){
+  .wrap{display:block}
+  .menu{display:inline-block}
+  nav#toc{display:none;position:fixed;top:56px;right:0;left:0;max-height:calc(100vh - 56px);background:var(--bg2);border-bottom:1px solid var(--line2);padding:18px 24px 22px;z-index:55}
+  nav#toc.open{display:block}
+}
+
+/* hero */
+.hero{padding:64px 0 28px;border-bottom:1px solid var(--line)}
+.eyebrow{font:600 12px var(--sans);letter-spacing:.18em;text-transform:uppercase;color:var(--gold)}
+h1{font:700 clamp(34px,6vw,58px)/1.08 var(--serif);margin:14px 0 18px;letter-spacing:-.01em}
+h1 em{font-style:normal;color:var(--gold)}
+.lede{font-size:clamp(18px,2.3vw,21px);color:var(--mut);max-width:720px;margin:0}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:34px 0 8px}
+.stat{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 18px}
+.stat b{display:block;font:700 28px var(--serif);color:var(--gold2)}
+.stat span{font-size:13px;color:var(--mut)}
+
+/* sections */
+section{padding:56px 0 8px;border-bottom:1px solid var(--line)}
+section:last-of-type{border-bottom:0}
+h2.sec{font:700 clamp(27px,4vw,36px)/1.15 var(--serif);margin:0 0 20px;display:flex;gap:14px;align-items:baseline}
+h2.sec .num{font:600 15px var(--sans);color:var(--gold);letter-spacing:.1em;flex:none}
+h3{font:700 22px/1.3 var(--serif);margin:40px 0 12px;color:var(--text)}
+h3 .n{color:var(--gold);font-family:var(--sans);font-size:14px;letter-spacing:.08em;margin-right:8px}
+h4{font:600 13px var(--sans);letter-spacing:.12em;text-transform:uppercase;color:var(--gold);margin:26px 0 8px}
+p,ul,ol{max-width:740px}
+p{margin:0 0 16px}
+ul,ol{padding-left:22px;margin:0 0 18px}
+li{margin:6px 0}
+li::marker{color:var(--gold3)}
+strong{color:#fff}
+code{font:.88em var(--mono);background:var(--card2);border:1px solid var(--line);border-radius:5px;padding:1px 6px;color:var(--gold2)}
+.callout{background:var(--goldbg);border:1px solid rgba(212,175,55,.28);border-left:4px solid var(--gold);border-radius:10px;padding:16px 20px;margin:24px 0;max-width:780px}
+.callout.gray{background:var(--card);border-color:var(--line2);border-left-color:var(--mut)}
+.callout h5{margin:0 0 6px;font:700 12px var(--sans);letter-spacing:.14em;text-transform:uppercase;color:var(--gold)}
+.callout.gray h5{color:var(--mut)}
+.callout p:last-child,.callout ul:last-child{margin-bottom:0}
+.two{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px;margin:20px 0}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px}
+.card h5{margin:0 0 8px;font:700 17px var(--serif)}
+.card p,.card ul{font-size:15px;color:var(--mut);margin-bottom:8px}
+.card.gold{border-color:rgba(212,175,55,.4);background:linear-gradient(180deg,var(--goldbg),var(--card))}
+
+/* tables */
+.tw{overflow-x:auto;margin:20px 0;border:1px solid var(--line);border-radius:12px;background:var(--card)}
+table{border-collapse:collapse;width:100%;font-size:14.5px}
+th,td{padding:10px 14px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}
+th{font:600 12px var(--sans);letter-spacing:.08em;text-transform:uppercase;color:var(--gold);background:var(--bg2);white-space:nowrap}
+tr:last-child td{border-bottom:0}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+td code{white-space:nowrap}
+.mono{font-family:var(--mono);font-size:13px}
+
+/* figures */
+figure.viz{margin:30px 0;background:var(--card);border:1px solid var(--line);border-radius:16px;padding:22px;max-width:100%}
+figure.viz>figcaption.cap{font:600 12px var(--sans);letter-spacing:.14em;text-transform:uppercase;color:var(--gold);margin-bottom:6px}
+figure.viz>.sub{color:var(--mut);font-size:14.5px;margin:0 0 16px;max-width:720px}
+svg{display:block;width:100%;height:auto}
+.note{font-size:13.5px;color:var(--mut);margin:12px 0 0}
+.svgt{fill:var(--text);font-family:var(--sans)}
+.svgm{fill:var(--mut);font-family:var(--sans)}
+.svgd{fill:var(--dim);font-family:var(--sans)}
+.svgg{fill:var(--gold2);font-family:var(--sans)}
+.grid{stroke:var(--line);stroke-width:1}
+.ax{stroke:var(--line2);stroke-width:1}
+
+/* controls */
+.tabs{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 16px;padding:4px;background:var(--bg2);border:1px solid var(--line);border-radius:12px;width:fit-content;max-width:100%}
+.tabs [role=tab],.seg button{background:transparent;border:0;color:var(--mut);font:500 14px var(--sans);padding:8px 14px;border-radius:9px;cursor:pointer}
+.tabs [role=tab]:hover,.seg button:hover{color:var(--text)}
+.tabs [role=tab][aria-selected=true],.seg button[aria-pressed=true]{background:var(--gold);color:#0a0a0b;font-weight:700}
+.seg{display:flex;flex-wrap:wrap;gap:6px;padding:4px;background:var(--bg2);border:1px solid var(--line);border-radius:12px;width:fit-content;max-width:100%}
+.btn{background:var(--card2);color:var(--text);border:1px solid var(--line2);border-radius:9px;padding:8px 16px;font:500 14px var(--sans);cursor:pointer}
+.btn:hover{border-color:var(--gold);color:var(--gold2)}
+.btn:disabled{opacity:.4;cursor:not-allowed}
+select,input[type=range]{font:inherit}
+select{background:var(--card2);color:var(--text);border:1px solid var(--line2);border-radius:9px;padding:8px 12px;max-width:100%}
+input[type=range]{accent-color:var(--gold);width:100%}
+label.lb{font:600 12px var(--sans);letter-spacing:.1em;text-transform:uppercase;color:var(--mut);display:block;margin-bottom:6px}
+.row{display:flex;flex-wrap:wrap;gap:16px;align-items:flex-end;margin-bottom:16px}
+
+/* badges */
+.badge{display:inline-flex;align-items:center;gap:6px;font:600 12px var(--sans);padding:3px 10px;border-radius:99px;border:1px solid var(--line2);white-space:nowrap}
+.badge.ok{background:var(--goldbg2);border-color:var(--gold3);color:var(--gold2)}
+.badge.no{background:transparent;border-color:var(--dim);color:var(--mut);text-decoration:line-through;text-decoration-color:transparent}
+.badge.type{font-family:var(--mono);font-weight:500;color:var(--mut)}
+
+/* pipeline */
+.pipe{display:flex;flex-wrap:wrap;gap:10px;align-items:stretch}
+.pipe .st{flex:1 1 150px;position:relative;background:var(--card2);border:1px solid var(--line2);border-radius:12px;padding:14px;color:var(--text);text-align:left;cursor:pointer;font:inherit;min-height:96px}
+.pipe .st:hover{border-color:var(--gold)}
+.pipe .st[aria-pressed=true]{border-color:var(--gold);background:var(--goldbg2)}
+.pipe .st small{display:block;color:var(--gold);font:700 11px var(--sans);letter-spacing:.14em;text-transform:uppercase;margin-bottom:4px}
+.pipe .st b{font:600 14px var(--mono);word-break:break-word}
+.pipe .st span{display:block;font-size:12.5px;color:var(--mut);margin-top:4px;line-height:1.4}
+.pipe .st.ghost{border-style:dashed;background:transparent;color:var(--dim);cursor:default}
+.pipe .st.ghost small{color:var(--dim)}
+.pipe .ar{align-self:center;color:var(--gold3);font-size:20px;flex:0 0 auto}
+.info{margin-top:14px;padding:14px 18px;background:var(--bg2);border:1px solid var(--line);border-left:3px solid var(--gold);border-radius:10px;font-size:15px;min-height:70px}
+.info b.t{color:var(--gold2)}
+
+/* stepper readouts */
+.read{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin:14px 0}
+.read div{background:var(--bg2);border:1px solid var(--line);border-radius:10px;padding:10px 14px}
+.read small{display:block;font:600 11px var(--sans);letter-spacing:.1em;text-transform:uppercase;color:var(--dim)}
+.read b{font:700 24px var(--serif);color:var(--gold2);font-variant-numeric:tabular-nums}
+.read .eq{grid-column:1/-1;font:14px var(--mono);color:var(--mut)}
+.dots{display:flex;gap:6px;align-items:center;margin:14px 0 6px;flex-wrap:wrap}
+.dots i{width:26px;height:26px;border-radius:50%;border:2px solid var(--line2);display:grid;place-items:center;font:600 11px var(--sans);color:var(--dim);font-style:normal}
+.dots i.past{border-color:var(--gold3);color:var(--mut)}
+.dots i.cur{background:var(--gold);border-color:var(--gold);color:#000}
+.dots i.ret{border-radius:6px}
+
+/* waterfall */
+.wf{display:grid;gap:10px;margin-top:6px}
+.wf .r{display:grid;grid-template-columns:minmax(120px,230px) 1fr 74px;gap:12px;align-items:center;font-size:14px}
+.wf .tr{position:relative;height:26px;background:var(--bg2);border-radius:6px;border:1px solid var(--line)}
+.wf .bar{position:absolute;top:2px;bottom:2px;border-radius:4px;background:var(--gold)}
+.wf .bar.g{background:#8b8b92}
+.wf .bar.cut{background:repeating-linear-gradient(135deg,#6b6b72 0 4px,#3a3a3f 4px 8px)}
+.wf .bar.tot{background:linear-gradient(90deg,var(--gold3),var(--gold2))}
+.wf .v{text-align:right;font:600 14px var(--mono);font-variant-numeric:tabular-nums}
+@media (max-width:560px){.wf .r{grid-template-columns:1fr 64px}.wf .r .tr{grid-column:1/-1;order:3}}
+
+/* chain */
+.chain{display:flex;flex-wrap:wrap;gap:6px;align-items:center;font:13px var(--mono)}
+.chain button{background:var(--card2);color:var(--text);border:1px solid var(--line2);border-radius:7px;padding:6px 10px;font:inherit;cursor:pointer}
+.chain button:hover,.chain button[aria-pressed=true]{border-color:var(--gold);color:var(--gold2)}
+.chain .s{color:var(--gold3)}
+
+/* clocks */
+.clocks{display:grid;gap:10px}
+.clk{display:grid;grid-template-columns:150px 1fr;gap:14px;align-items:center;background:var(--bg2);border:1px solid var(--line);border-radius:10px;padding:12px 16px}
+.clk b{font:600 13px var(--mono);color:var(--gold2)}
+.clk span{font-size:14.5px;color:var(--mut)}
+.clk span em{font-style:normal;color:var(--text);font-family:var(--mono);font-size:13px}
+@media (max-width:560px){.clk{grid-template-columns:1fr}}
+
+/* status grid */
+.sg{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:8px}
+.sg div{display:flex;justify-content:space-between;gap:10px;align-items:center;background:var(--bg2);border:1px solid var(--line);border-radius:9px;padding:8px 12px;font-size:13.5px}
+.sg .badge{font-size:11px;padding:2px 8px}
+.badge.miss{border-style:dashed;color:var(--dim)}
+
+/* code */
+details.code{margin:18px 0;background:var(--card);border:1px solid var(--line);border-radius:12px;overflow:hidden;max-width:100%}
+details.code>summary{cursor:pointer;padding:12px 18px;font:600 14px var(--mono);color:var(--gold2);list-style:none;display:flex;justify-content:space-between;gap:10px;align-items:center}
+details.code>summary::-webkit-details-marker{display:none}
+details.code>summary::after{content:"Show code";font:500 12px var(--sans);color:var(--mut);border:1px solid var(--line2);border-radius:99px;padding:3px 10px}
+details.code[open]>summary::after{content:"Hide code"}
+details.code>summary small{font:400 12.5px var(--sans);color:var(--mut);margin-left:10px}
+.cw{position:relative;border-top:1px solid var(--line)}
+.cw pre{margin:0;padding:18px 20px;overflow:auto;max-height:560px;background:#0d0d0e;font:13px/1.6 var(--mono);color:#d9d6cd;tab-size:4}
+.cw pre code{background:none;border:0;padding:0;color:inherit;font:inherit}
+.cp{position:absolute;right:10px;top:10px;z-index:2;background:var(--card2);border:1px solid var(--line2);color:var(--mut);border-radius:7px;padding:4px 10px;font:500 12px var(--sans);cursor:pointer}
+.cp:hover{color:var(--gold2);border-color:var(--gold)}
+.tk{color:var(--gold)} .ts{color:#cfc8a6} .tc{color:var(--dim);font-style:italic} .tn{color:var(--gold2)}
+.out{margin:14px 0 22px}
+.out>.lab{font:600 11px var(--sans);letter-spacing:.14em;text-transform:uppercase;color:var(--dim);margin-bottom:6px}
+.out pre{margin:0;padding:14px 18px;background:var(--bg2);border:1px solid var(--line);border-left:3px solid var(--gold3);border-radius:10px;overflow:auto;max-height:420px;font:12.5px/1.55 var(--mono);color:var(--mut)}
+.out pre code{background:none;border:0;padding:0;color:inherit;font:inherit}
+
+/* tooltip */
+#tip{position:fixed;z-index:90;pointer-events:none;background:#000;border:1px solid var(--gold);color:var(--text);padding:8px 12px;border-radius:8px;font:13px/1.45 var(--sans);max-width:260px;box-shadow:0 8px 30px rgba(0,0,0,.6)}
+.pt{cursor:pointer}
+.pt:focus-visible,.pt:hover{stroke:#fff;stroke-width:2}
+
+/* failures */
+.res{display:inline-flex;gap:6px;align-items:center;font:700 12px var(--sans);padding:3px 10px;border-radius:99px;white-space:nowrap}
+.res.a{background:var(--goldbg2);color:var(--gold2);border:1px solid var(--gold3)}
+.res.r{background:transparent;color:var(--mut);border:1px dashed var(--dim)}
+
+/* summary */
+.take{counter-reset:t;display:grid;gap:12px;margin:20px 0}
+.take li{list-style:none;counter-increment:t;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 18px 14px 58px;position:relative;margin:0;max-width:none}
+.take li::before{content:counter(t);position:absolute;left:16px;top:12px;width:30px;height:30px;border-radius:50%;background:var(--goldbg2);border:1px solid var(--gold3);color:var(--gold2);display:grid;place-items:center;font:700 14px var(--sans)}
+.take{padding:0}
+
+footer{border-top:1px solid var(--line);margin-top:20px;padding:34px 20px 46px;text-align:center;color:var(--gold);font:600 14px var(--sans);letter-spacing:.06em}
+.legend{display:flex;flex-wrap:wrap;gap:6px 18px;font-size:13px;color:var(--mut);margin:10px 0 0}
+.legend span{display:inline-flex;align-items:center;gap:7px}
+.legend svg{width:16px;height:16px;flex:none}
+@media (max-width:620px){body{font-size:16px}figure.viz{padding:16px}.hero{padding-top:40px}}
+</style>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="top">
+  <div class="in">
+    <div class="brand">Sagemaker Feature store part 1 post read</div>
+    <button class="menu" id="menuBtn" aria-expanded="false" aria-controls="toc">Sections</button>
+  </div>
+  <div id="bar" aria-hidden="true"></div>
+</header>
+
+<div class="wrap">
+<nav id="toc" aria-label="Sections">
+  <h2>On this page</h2>
+  <ol>
+    <li><a href="#top">Overview</a></li>
+    <li><a href="#s1">1 · Why a feature store</a></li>
+    <li><a href="#s2">2 · The platform</a></li>
+    <li><a href="#s3">3 · Orders into features</a></li>
+    <li><a href="#s4">4 · The feature group</a></li>
+    <li><a href="#s5">5 · Ingesting features</a></li>
+    <li><a href="#s6">6 · Querying with Athena</a></li>
+    <li><a href="#s7">7 · Point-in-time correctness</a></li>
+    <li><a href="#s8">8 · Training and scoring</a></li>
+    <li><a href="#s9">9 · Failure modes</a></li>
+    <li><a href="#s10">10 · Tearing it down</a></li>
+    <li><a href="#s11">11 · Summary</a></li>
+    <li><a href="#s12">12 · References</a></li>
+  </ol>
+</nav>
+
+<main id="main">
+
+<!-- ================= HERO ================= -->
+<header class="hero" id="top">
+  <div class="eyebrow">AWS SageMaker · Feature Store · Part 1 · The Offline Store</div>
+  <h1>Giving a model's memory <em>a proper home</em></h1>
+  <p class="lede">The returns model needs to know each customer's history. This read gives that history a home, a feature store, then builds training data from it in a way that does not cheat, and measures exactly how much cheating would have flattered the model.</p>
+  <div class="stats" role="list">
+    <div class="stat" role="listitem"><b>12,000</b><span>orders, Oct 2025 – Sep 2026</span></div>
+    <div class="stat" role="listitem"><b>1,440</b><span>customers</span></div>
+    <div class="stat" role="listitem"><b>15,598</b><span>customer feature rows</span></div>
+    <div class="stat" role="listitem"><b>0.331</b><span>share of orders returned</span></div>
+  </div>
+</header>
+
+<section id="preface" style="padding-top:40px">
+  <p>In the previous lesson, the returns model was trained with a SageMaker training job and served from an endpoint. To get a prediction, the caller had to send the customer's history along with the order: how many orders the customer had placed before, how many of them came back, and how long ago they signed up. That works in a demo. A real checkout page only knows which customer is logged in, so something has to look the history up.</p>
+  <p>That something is a <strong>feature store</strong>. Section 1 explains what it is, using the shop's own data. The rest of the read builds one with SageMaker Feature Store, trains the model from it, and measures a mistake that is very easy to make on the way.</p>
+
+  <div class="two">
+    <div class="card gold">
+      <h5>What you will be able to do</h5>
+      <ul>
+        <li>Explain what a feature store is for, how offline and online stores differ, and what training and serving skew is.</li>
+        <li>Turn raw orders into customer feature rows, each with the time it became true.</li>
+        <li>Create an offline-only feature group from Python, and know the one bucket permission its role needs.</li>
+        <li>Measure how long written records take to show up, and query every stored version with Athena.</li>
+        <li>Build point-in-time and naive training sets, and quantify the gap with AUC.</li>
+        <li>Recognise quiet write failures, and clean up what deleting a feature group leaves behind.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h5>Prerequisites</h5>
+      <p>The previous lesson, so the platform, the training job and <code>train.py</code> are familiar. Basic SQL with <code>JOIN</code>, <code>GROUP BY</code> and window functions such as <code>row_number()</code>. AUC and the train and validation split.</p>
+      <h5 style="margin-top:14px">How to read the code</h5>
+      <p>Every script is available in a collapsible block with a copy button. Outputs come from a real run, so timings in your own account will differ a little. The account ID is masked as <code>111122223333</code>.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ================= 1 ================= -->
+<section id="s1">
+  <h2 class="sec"><span class="num">01</span>Why a feature store</h2>
+  <p>Before building anything, it helps to see the problem clearly. It starts with three numbers the previous lesson's model used.</p>
+
+  <h3><span class="n">1.1</span>Where the previous lesson left off</h3>
+  <p>The model used three numbers about the customer: <code>prior_orders</code>, <code>prior_returns</code> and <code>customer_tenure_days</code>. A number a model takes as input is called a <strong>feature</strong>. These three describe the customer rather than the order, and they change over time. Every new order adds one to <code>prior_orders</code>. Every return adds one to <code>prior_returns</code>.</p>
+  <p>Two different parts of the system need these numbers, and they need different versions of them.</p>
+  <ul>
+    <li><strong>Training</strong> needs them for past orders. For an order placed last December, it needs the customer's history as it was last December.</li>
+    <li><strong>The endpoint</strong> needs them for an order happening right now: the customer's history as it is today.</li>
+  </ul>
+  <p>Previously, both got the numbers the simple way. The training file came with them already filled in, and the caller worked them out and sent them with every request. So two separate pieces of code computed the same thing. If they ever count even a little differently, say one includes today's order and the other does not, the model sees numbers at checkout that do not match what it learned from. This is <strong>training and serving skew</strong>. Nothing reports an error when it happens. The predictions just get worse.</p>
+
+  <figure class="viz" aria-labelledby="skewcap">
+    <figcaption class="cap" id="skewcap">Visualizer · Where skew comes from</figcaption>
+    <p class="sub">Switch between the two designs. With two code paths, any small difference in counting becomes silent skew. With a feature store, one piece of code writes the features and both sides read them.</p>
+    <div class="tabs" data-tabs role="tablist" aria-label="Design">
+      <button role="tab" id="tk1" aria-selected="true" aria-controls="pk1">Two code paths</button>
+      <button role="tab" id="tk2" aria-selected="false" aria-controls="pk2" tabindex="-1">One feature store</button>
+    </div>
+    <div id="pk1" role="tabpanel" aria-labelledby="tk1">
+      <svg viewBox="0 0 760 270" role="img" aria-label="Diagram: training code and serving code each compute customer history separately, and may disagree, causing skew.">
+        <defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#d4af37"/></marker>
+        <marker id="ahg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#7b7b82"/></marker></defs>
+        <rect x="20" y="30" width="250" height="80" rx="12" fill="#1e1e21" stroke="#3d3d43"/>
+        <text x="145" y="62" text-anchor="middle" class="svgt" font-size="15" font-weight="600">Training code</text>
+        <text x="145" y="86" text-anchor="middle" class="svgm" font-size="12.5">counts history for past orders</text>
+        <rect x="490" y="30" width="250" height="80" rx="12" fill="#1e1e21" stroke="#3d3d43"/>
+        <text x="615" y="62" text-anchor="middle" class="svgt" font-size="15" font-weight="600">Serving code (the caller)</text>
+        <text x="615" y="86" text-anchor="middle" class="svgm" font-size="12.5">counts history for today's order</text>
+        <path d="M270 70H490" stroke="#d4af37" stroke-width="2" stroke-dasharray="6 5" marker-end="url(#ah)" marker-start="url(#ah)"/>
+        <text x="380" y="58" text-anchor="middle" class="svgg" font-size="13" font-weight="700">can drift apart</text>
+        <path d="M145 110V170" stroke="#7b7b82" stroke-width="2" marker-end="url(#ahg)"/>
+        <path d="M615 110V170" stroke="#7b7b82" stroke-width="2" marker-end="url(#ahg)"/>
+        <rect x="20" y="172" width="250" height="60" rx="12" fill="#161618" stroke="#2c2c30"/>
+        <text x="145" y="208" text-anchor="middle" class="svgm" font-size="14">Model learns from these numbers</text>
+        <rect x="490" y="172" width="250" height="60" rx="12" fill="#161618" stroke="#2c2c30"/>
+        <text x="615" y="208" text-anchor="middle" class="svgm" font-size="14">Model sees these numbers at checkout</text>
+        <text x="380" y="256" text-anchor="middle" class="svgg" font-size="13.5" font-weight="600">No error is raised. Predictions simply get worse.</text>
+      </svg>
+    </div>
+    <div id="pk2" role="tabpanel" aria-labelledby="tk2" hidden>
+      <svg viewBox="0 0 760 270" role="img" aria-label="Diagram: one feature code writes to a feature store, whose offline store feeds training and whose online store feeds the endpoint.">
+        <rect x="20" y="95" width="190" height="80" rx="12" fill="#1e1e21" stroke="#d4af37"/>
+        <text x="115" y="127" text-anchor="middle" class="svgt" font-size="15" font-weight="600">One piece of code</text>
+        <text x="115" y="150" text-anchor="middle" class="svgm" font-size="12.5">computes features once</text>
+        <path d="M210 135H280" stroke="#d4af37" stroke-width="2" marker-end="url(#ah)"/>
+        <rect x="282" y="55" width="180" height="160" rx="14" fill="#161618" stroke="#d4af37" stroke-width="1.5"/>
+        <text x="372" y="85" text-anchor="middle" class="svgg" font-size="15" font-weight="700">Feature store</text>
+        <rect x="298" y="100" width="148" height="46" rx="8" fill="#1e1e21" stroke="#8f7420"/>
+        <text x="372" y="128" text-anchor="middle" class="svgt" font-size="13">Offline store · every value</text>
+        <rect x="298" y="156" width="148" height="46" rx="8" fill="#161618" stroke="#3d3d43" stroke-dasharray="5 4"/>
+        <text x="372" y="184" text-anchor="middle" class="svgm" font-size="13">Online store · latest only</text>
+        <path d="M462 123H540" stroke="#d4af37" stroke-width="2" marker-end="url(#ah)"/>
+        <path d="M462 179H540" stroke="#7b7b82" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#ahg)"/>
+        <rect x="542" y="98" width="198" height="50" rx="10" fill="#1e1e21" stroke="#3d3d43"/>
+        <text x="641" y="128" text-anchor="middle" class="svgt" font-size="14" font-weight="600">Training reads it</text>
+        <rect x="542" y="156" width="198" height="50" rx="10" fill="transparent" stroke="#3d3d43" stroke-dasharray="5 4"/>
+        <text x="641" y="180" text-anchor="middle" class="svgm" font-size="13.5">Endpoint reads it</text>
+        <text x="641" y="197" text-anchor="middle" class="svgd" font-size="11.5">(next part of the series)</text>
+        <text x="380" y="252" text-anchor="middle" class="svgg" font-size="13.5" font-weight="600">Both sides see the same numbers, because there is only one source.</text>
+      </svg>
+    </div>
+  </figure>
+
+  <h3><span class="n">1.2</span>What a feature store is</h3>
+  <p>A <strong>feature store</strong> is a database built for features. The features are worked out once, by one piece of code, and written to the store. Training and the endpoint then both read them from the store, so they always see the same numbers.</p>
+  <p>The two needs from 1.1 are different, so a feature store keeps the data in two forms. A bank account is a good picture of the difference. Your bank statement lists every transaction with its date, so you can work out what your balance was on any day in the past. The banking app's home screen shows only today's balance, but it shows it instantly.</p>
+  <ul>
+    <li>The <strong>offline store</strong> is the statement. It keeps every value a feature has ever had, with the time it became true. Training reads it.</li>
+    <li>The <strong>online store</strong> is the home screen. It keeps only the latest value for each customer and answers a lookup in milliseconds. The endpoint reads it.</li>
+  </ul>
+
+  <figure class="viz" aria-labelledby="offcap">
+    <figcaption class="cap" id="offcap">Visualizer · Statement vs home screen</figcaption>
+    <p class="sub">The same customer, <code>C-00001</code>, seen through each store. The offline store keeps a record every time their history changed; the online store holds only the newest one.</p>
+    <div class="tabs" data-tabs role="tablist" aria-label="Store">
+      <button role="tab" id="to1" aria-selected="true" aria-controls="po1">Offline store · the statement</button>
+      <button role="tab" id="to2" aria-selected="false" aria-controls="po2" tabindex="-1">Online store · the home screen</button>
+    </div>
+    <div id="po1" role="tabpanel" aria-labelledby="to1">
+      <div class="tw"><table>
+        <thead><tr><th>event_time</th><th class="num">orders_so_far</th><th class="num">returns_so_far</th><th class="num">return_rate</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">2025-10-13T00:00:00Z</td><td class="num">1</td><td class="num">0</td><td class="num">0.1667</td></tr>
+          <tr><td class="mono">2025-10-17T00:00:00Z</td><td class="num">2</td><td class="num">0</td><td class="num">0.1429</td></tr>
+          <tr><td class="mono">2025-10-27T00:00:00Z</td><td class="num">2</td><td class="num">1</td><td class="num">0.2857</td></tr>
+          <tr><td class="mono">2025-12-07T00:00:00Z</td><td class="num">3</td><td class="num">1</td><td class="num">0.2500</td></tr>
+          <tr><td colspan="4" style="text-align:center;color:var(--dim)">… every version kept, 25 rows in total for this customer …</td></tr>
+        </tbody></table></div>
+      <p class="note">Ask what the customer looked like on any past day, and the answer is in the table.</p>
+    </div>
+    <div id="po2" role="tabpanel" aria-labelledby="to2" hidden>
+      <div class="two" style="margin:0">
+        <div class="card gold"><h5>Lookup: <code>customer_id = C-00001</code></h5>
+          <div class="read" style="margin:8px 0 0">
+            <div><small>orders_so_far</small><b>14</b></div><div><small>returns_so_far</small><b>11</b></div>
+            <div><small>return_rate</small><b>0.6316</b></div><div><small>tenure_days</small><b>1126</b></div></div>
+        </div>
+        <div class="card"><h5>What it gives you</h5><p>Only the latest row, in milliseconds, behind an API. Perfect for a checkout page, useless for reconstructing what the customer looked like in December.</p></div>
+      </div>
+    </div>
+    <div class="tw" style="margin-top:20px"><table>
+      <thead><tr><th>Question</th><th>Offline store</th><th>Online store</th></tr></thead>
+      <tbody>
+        <tr><td>What it keeps</td><td>Every value, old ones included</td><td>Only the latest value for each customer</td></tr>
+        <tr><td>Where it lives</td><td>Files in your S3 bucket</td><td>Inside Feature Store, behind an API</td></tr>
+        <tr><td>How you read it</td><td>SQL queries, a few seconds each</td><td>One lookup by customer, milliseconds</td></tr>
+        <tr><td>Who reads it</td><td>Training</td><td>The endpoint, at request time</td></tr>
+      </tbody></table></div>
+  </figure>
+  <p>AWS's feature store is <strong>SageMaker Feature Store</strong>, and it has both halves. This read builds the offline store and trains the model from it. The next part adds the online store and connects it to an endpoint.</p>
+
+  <h3><span class="n">1.3</span>The project, one step further</h3>
+  <p>The shop still wants to know, at checkout, how likely an order is to come back. The label is still <code>returned</code>: 1 if the order was sent back, 0 if not. What changes is the data. The previous lesson had one row per order, with the customer's history already filled in as columns. This one starts a step earlier, from the raw orders, where each order only says which customer placed it.</p>
+  <p>The new file, <code>returns_events.csv</code>, holds 12,000 orders from 1,440 customers, placed between October 2025 and September 2026. About a third of them, 0.331, were returned. Most customers order many times over the year, so their history keeps changing.</p>
+  <div class="tw"><table>
+    <thead><tr><th>Column</th><th>What it holds</th></tr></thead>
+    <tbody>
+      <tr><td><code>order_id</code></td><td>One ID per order, <code>ORD-200000</code> and up</td></tr>
+      <tr><td><code>customer_id</code></td><td>Who placed it, <code>C-00001</code> and so on</td></tr>
+      <tr><td><code>order_date</code></td><td>The day it was placed</td></tr>
+      <tr><td><code>category</code></td><td>apparel, beauty, books, electronics or home</td></tr>
+      <tr><td><code>price</code>, <code>discount_pct</code>, <code>delivery_days</code></td><td>About the order itself</td></tr>
+      <tr><td><code>payment_method</code></td><td>card, cod, upi or wallet</td></tr>
+      <tr><td><code>is_gift</code>, <code>seller_rating</code></td><td>About the order itself</td></tr>
+      <tr><td><code>returned</code></td><td>The label</td></tr>
+      <tr><td><code>signup_date</code></td><td>When the customer joined</td></tr>
+    </tbody></table></div>
+  <p>The customer's history is not in the file. It has to be worked out from the orders, and that is where the feature store comes in. Select any step below to see its role in the path the data takes.</p>
+
+  <figure class="viz" aria-labelledby="pipecap">
+    <figcaption class="cap" id="pipecap">Visualizer · The path the data takes</figcaption>
+    <div class="pipe" id="pipe">
+      <button class="st" data-i="0" aria-pressed="true"><small>Step 1</small><b>returns_events.csv</b><span>Raw orders in S3</span></button>
+      <div class="ar" aria-hidden="true">→</div>
+      <button class="st" data-i="1" aria-pressed="false"><small>Step 2</small><b>features.py</b><span>Orders → feature rows</span></button>
+      <div class="ar" aria-hidden="true">→</div>
+      <button class="st" data-i="2" aria-pressed="false"><small>Step 3</small><b>Feature group</b><span>Offline store in S3</span></button>
+      <div class="ar" aria-hidden="true">→</div>
+      <button class="st" data-i="3" aria-pressed="false"><small>Step 4</small><b>training_set.py</b><span>Athena SQL join</span></button>
+      <div class="ar" aria-hidden="true">→</div>
+      <button class="st" data-i="4" aria-pressed="false"><small>Step 5</small><b>train.py</b><span>XGBoost training job</span></button>
+    </div>
+    <div class="pipe" style="margin-top:10px" aria-label="Not built in this part">
+      <div class="st ghost"><small>Next part</small><b>Online store</b><span>Nothing here creates it</span></div>
+      <div class="ar" aria-hidden="true" style="color:var(--dim)">→</div>
+      <div class="st ghost"><small>Next part</small><b>Endpoint</b><span>Nothing here creates it</span></div>
+    </div>
+    <div class="info" id="pipeinfo" aria-live="polite"></div>
+  </figure>
+
+  <h3><span class="n">1.4</span>The question this read answers</h3>
+  <p>Step 4 hides the most important decision. A customer has many rows in the offline store, one for each change. When you build the training row for one of their orders, which of those rows do you use?</p>
+  <div class="callout">
+    <h5>The core question</h5>
+    <p>The honest answer is the row that was true <strong>just before the order was placed</strong>. That is all the checkout page could have known at that moment. The easy answer is the customer's <strong>latest</strong> row, because it is the one an ordinary customer table would hold. But the latest row knows things that had not happened yet when the order was placed, such as whether that very order came back. Section 7 builds the training data both ways and measures how far apart they are. The gap is big enough to fool you.</p>
+  </div>
+  <p>To try any of this, the platform from the previous lesson has to come back first.</p>
+</section>
+
+<!-- ================= 2 ================= -->
+<section id="s2">
+  <h2 class="sec"><span class="num">02</span>Building the platform from nothing</h2>
+  <p>This work starts from an empty AWS account, so the VPC, the role, the bucket and the Studio domain from the previous lesson have to be built again. Two scripts keep that repeatable: a read-only <code>check.sh</code> that looks at what is there, and a <code>restore.sh</code> that creates only what is missing and is safe to run again. Both take your bucket name as their only argument, because bucket names are shared by every AWS account in the world.</p>
+
+  <div class="two">
+    <div class="card"><h5>Network</h5><p>A VPC, two private subnets with their route tables, an internet gateway, an S3 gateway endpoint, two security groups (one for Studio, one for endpoints allowing HTTPS from Studio), a regional NAT gateway with a route from each subnet, and six interface endpoints: <code>sagemaker.api</code>, <code>sagemaker.runtime</code>, <code>sts</code>, <code>logs</code>, <code>ssm</code>, <code>ssmmessages</code>.</p></div>
+    <div class="card"><h5>Role</h5><p><code>returns-ml-sagemaker-role</code> with three AWS managed policies and the remote-access policy. The bucket policy now allows one more action, <code>s3:GetBucketAcl</code>, and a new policy for AWS Glue allows <code>glue:DeleteTable</code> in the <code>sagemaker_featurestore</code> database only.</p></div>
+    <div class="card"><h5>Data</h5><p>The bucket and one file, <code>returns_events.csv</code>, under <code>raw/events/</code>. There are no prepared training files this time, because training data is built from the feature store.</p></div>
+    <div class="card"><h5>Studio</h5><p>A VPC-only domain, an <code>instructor</code> user profile and the <code>returns-lab</code> space on <code>ml.m5.large</code> with remote access on and a 5 GB disk. Idle shutdown is 180 minutes, because work over the remote connection does not count as use and long jobs run here.</p></div>
+  </div>
+
+  <figure class="viz" aria-labelledby="chkcap">
+    <figcaption class="cap" id="chkcap">Visualizer · What the check reports</figcaption>
+    <p class="sub">The list is the previous lesson's with two new policy lines and one data file. On an empty account every line says <strong>MISSING</strong>; after the restore, every line says <strong>OK</strong>. If the VPC is missing, the script does not look for the gateways, endpoints and security groups that would live inside it, because none of them can exist.</p>
+    <div class="seg" id="chkseg" role="group" aria-label="Account state">
+      <button aria-pressed="true" data-s="0">Empty account</button>
+      <button aria-pressed="false" data-s="1">After restore.sh</button>
+    </div>
+    <div class="sg" id="chkgrid" style="margin-top:14px"></div>
+  </figure>
+
+  <p>Every script in the project reads its settings from one place, <code>config.py</code>. It has one new name, <code>FEATURE_GROUP</code>, the name of the feature group that section 4 creates.</p>
+  <details class="code"><summary>config.py<small>change BUCKET to your own</small></summary><div class="cw"><button class="cp">Copy</button><pre><code data-src="c-config" data-lang="py"></code></pre></div></details>
+</section>
+
+<!-- ================= 3 ================= -->
+<section id="s3">
+  <h2 class="sec"><span class="num">03</span>Turning orders into customer features</h2>
+  <p>The platform is back and the raw orders are in the bucket. The first step of the pipeline is <code>features.py</code>. It reads the orders and works out each customer's history: the same three numbers as before, plus a return rate.</p>
+  <p>A customer's history changes at two kinds of moment.</p>
+  <ul>
+    <li><strong>When they place an order.</strong> <code>orders_so_far</code> goes up by one.</li>
+    <li><strong>When a return becomes known.</strong> The shop only learns that an order came back some time after it was placed. This file uses 14 days, set as <code>RESOLVE_DAYS</code>, so <code>returns_so_far</code> goes up 14 days after the order, never on the day itself.</li>
+  </ul>
+  <p><code>features.py</code> writes one row for every such moment. Each row has six columns.</p>
+  <div class="tw"><table>
+    <thead><tr><th>Column</th><th>Meaning</th></tr></thead>
+    <tbody>
+      <tr><td><code>customer_id</code></td><td>Which customer the row is about.</td></tr>
+      <tr><td><code>event_time</code></td><td>When the row became true, as text such as <code>2025-10-13T00:00:00Z</code>. The <code>T</code> and the <code>Z</code> matter, as section 9 shows.</td></tr>
+      <tr><td><code>orders_so_far</code>, <code>returns_so_far</code></td><td>The counts at that moment.</td></tr>
+      <tr><td><code>return_rate</code></td><td><code>(returns_so_far + 1) / (orders_so_far + 5)</code>. The extra 1 and 5 pull a customer with few orders toward 20%, so one return out of one order does not read as a 100% returner. With no orders and no returns it gives exactly 0.2, a value section 7 reuses.</td></tr>
+      <tr><td><code>tenure_days</code></td><td>Days since the customer signed up, at that moment.</td></tr>
+    </tbody></table></div>
+  <p><code>orders_so_far</code>, <code>returns_so_far</code> and <code>tenure_days</code> are the previous lesson's <code>prior_orders</code>, <code>prior_returns</code> and <code>customer_tenure_days</code> with new names. The difference is that every row now also says when it became true. If two things happen to the same customer on the same day, they go into one row.</p>
+  <div class="callout">
+    <h5>Keep this in mind until section 7</h5>
+    <p>A row's counts include everything up to and <strong>including</strong> its own moment. The row stamped on the day of an order already counts that order.</p>
+  </div>
+
+  <figure class="viz" aria-labelledby="stepcap">
+    <figcaption class="cap" id="stepcap">Visualizer · Step through one customer's history</figcaption>
+    <p class="sub">The first eight rows <code>features.py</code> writes for customer <code>C-00001</code>. Drag the slider or use the buttons. Squares mark moments when a return became known; circles mark orders.</p>
+    <div class="row">
+      <button class="btn" id="stPrev" aria-label="Previous row">← Previous</button>
+      <button class="btn" id="stNext" aria-label="Next row">Next →</button>
+      <div style="flex:1;min-width:180px"><label class="lb" for="stRange">Row <span id="stN">1</span> of 8</label><input type="range" id="stRange" min="1" max="8" value="1"></div>
+    </div>
+    <div class="dots" id="stDots" aria-hidden="true"></div>
+    <div class="read" id="stRead"></div>
+    <div class="info" id="stWhy" aria-live="polite"></div>
+  </figure>
+
+  <details class="code"><summary>features.py<small>orders → customer feature rows</small></summary><div class="cw"><button class="cp">Copy</button><pre><code data-src="c-features" data-lang="py"></code></pre></div></details>
+  <div class="out"><div class="lab">Output · first customer, first eight rows</div><pre><code data-src="o-features" data-lang="out"></code></pre></div>
+  <p>Read customer <code>C-00001</code> from the top. The first order was on 13 October 2025, so <code>orders_so_far</code> is 1. A second order came on 17 October. On 27 October nothing was ordered, but <code>returns_so_far</code> went up to 1: that is the first order's return becoming known, 14 days after 13 October. The pattern repeats. The order on 7 December was returned, so 21 December has its own row with 2 returns. The order on 22 December was returned too, and 5 January 2026 shows 3.</p>
+
+  <h3><span class="n">3.1</span>Where the 15,598 rows come from</h3>
+  <p>Across all customers, 12,000 orders became 15,598 feature rows. Every order makes a row on the day it is placed, and every return makes a row 14 days later. When two of these fall on the same day for the same customer, they share one row. <code>count_rows.py</code> checks that sum by writing each order and each return as a (customer, day) pair and removing repeated pairs, the same merging <code>features.py</code> does.</p>
+
+  <figure class="viz" aria-labelledby="wfcap">
+    <figcaption class="cap" id="wfcap">Visualizer · Row count reconciliation</figcaption>
+    <div class="wf" id="wf" role="list"></div>
+    <p class="note">12,000 order rows plus 3,977 return rows would make 15,977. But 200 orders were placed on a day when the same customer had already ordered, and 179 returns became known on a day that already had a row for that customer. Taking both away leaves 15,598, exactly what <code>customer_features</code> returns.</p>
+  </figure>
+  <details class="code"><summary>count_rows.py<small>verifies the total</small></summary><div class="cw"><button class="cp">Copy</button><pre><code data-src="c-count" data-lang="py"></code></pre></div></details>
+  <div class="out"><div class="lab">Output</div><pre><code data-src="o-count" data-lang="out"></code></pre></div>
+
+  <p>These rows are ready for a feature store, and Feature Store has a name for each part of them. One row is a <strong>record</strong>. The column that says who a record is about, here <code>customer_id</code>, is the <strong>record identifier</strong>. The column that says when it became true, here <code>event_time</code>, is the <strong>event time</strong>. A customer can have many records, one for each change. When <code>C-00001</code> placed their third order, a new record said <code>orders_so_far</code> was 3. The record before it, which said 2, is still true about the past. It is just no longer the latest. This is the bank statement from section 1.2: every version is kept, so you can ask what a customer looked like on any day.</p>
+</section>
+
+<!-- ================= 4 ================= -->
+<section id="s4">
+  <h2 class="sec"><span class="num">04</span>Creating a feature group from code</h2>
+  <p>The rows from <code>features.py</code> exist only in memory so far. Before Feature Store can keep them, it needs to know what a row looks like. That description is the <strong>feature group</strong>. It says which column is the record identifier and which is the event time, lists every feature with its type, and says where the records are kept: the offline store, the online store or both. Think of it as the definition of a table, with the rows added later.</p>
+
+  <figure class="viz" aria-labelledby="anacap">
+    <figcaption class="cap" id="anacap">Visualizer · Anatomy of the feature group</figcaption>
+    <p class="sub">Select any part to see what it does. There are only three feature types: <code>String</code>, <code>Integral</code> for whole numbers and <code>Fractional</code> for decimals.</p>
+    <div class="pipe" id="ana" style="gap:10px">
+      <button class="st" data-i="0" aria-pressed="true"><small>Record identifier</small><b>customer_id</b><span class="badge type">String</span></button>
+      <button class="st" data-i="1" aria-pressed="false"><small>Event time</small><b>event_time</b><span class="badge type">String</span></button>
+      <button class="st" data-i="2" aria-pressed="false"><small>Feature</small><b>orders_so_far</b><span class="badge type">Integral</span></button>
+      <button class="st" data-i="3" aria-pressed="false"><small>Feature</small><b>returns_so_far</b><span class="badge type">Integral</span></button>
+      <button class="st" data-i="4" aria-pressed="false"><small>Feature</small><b>return_rate</b><span class="badge type">Fractional</span></button>
+      <button class="st" data-i="5" aria-pressed="false"><small>Feature</small><b>tenure_days</b><span class="badge type">Integral</span></button>
+    </div>
+    <div class="pipe" style="margin-top:10px">
+      <button class="st" data-i="6" aria-pressed="false" data-grp="cfg"><small>Setting</small><b>OfflineStoreConfig</b><span>S3 prefix, no trailing /</span></button>
+      <button class="st ghost" disabled><small>Setting</small><b>OnlineStoreConfig</b><span>Not set: no online store</span></button>
+      <button class="st" data-i="7" aria-pressed="false" data-grp="cfg"><small>Setting</small><b>RoleArn</b><span>Role Feature Store writes with</span></button>
+    </div>
+    <div class="info" id="anainfo" aria-live="polite"></div>
+  </figure>
+
+  <p><code>create_feature_group.py</code> uses the <code>sagemaker</code> client in boto3, the AWS library for Python the previous lesson also used. It works in three steps.</p>
+  <ol>
+    <li>It asks whether a group called <code>returns-customers</code> already exists, with <code>describe_feature_group</code>. If it does, the file stops there.</li>
+    <li>It creates the group with <code>create_feature_group</code>.</li>
+    <li>Creating a group takes a little while, so it asks for the status every five seconds until it stops saying <code>Creating</code>, then prints what Feature Store set up.</li>
+  </ol>
+  <p>The settings follow the anatomy above. <code>customer_id</code> is a <code>String</code>, though IDs often look like numbers, and section 9 shows what goes wrong otherwise. The URI of the offline store has no <code>/</code> at the end. There is no <code>OnlineStoreConfig</code>, so this group has no online store. The file passes the space's own role as <code>RoleArn</code>.</p>
+  <details class="code"><summary>create_feature_group.py<small>offline store only</small></summary><div class="cw"><button class="cp">Copy</button><pre><code data-src="c-create" data-lang="py"></code></pre></div></details>
+  <div class="out"><div class="lab">Output</div><pre><code data-src="o-create" data-lang="out"></code></pre></div>
+  <ul>
+    <li><code>status</code> says the group was ready after 27 seconds.</li>
+    <li><code>glue table</code> is a table Feature Store made for you in <strong>AWS Glue</strong>, a list of tables kept by AWS. Each table says which columns some files in S3 have. Athena reads this table to know how to query the offline store's files with SQL. Feature Store put it in a database called <code>sagemaker_featurestore</code> and named it after the group, with a number on the end.</li>
+    <li><code>offline store</code> is the S3 folder where the records will be kept. It starts with the <code>feature-store</code> prefix from the file, and Feature Store added the rest. The folder ends with the group's name and the same number, so every group gets a folder of its own.</li>
+  </ul>
+  <p>Running the file again does nothing: it sees the group already exists.</p>
+
+  <div class="two">
+    <div class="card gold"><h5>What Feature Store adds to the Glue table</h5>
+      <p>The schema has the six features, plus three columns the file never defined:</p>
+      <p><span class="badge type">write_time</span> <span class="badge type">api_invocation_time</span> <span class="badge type">is_deleted</span></p>
+      <p>Section 6 explains what they are. The table is empty until something is written.</p></div>
+    <div class="card"><h5>One permission that is easy to miss</h5>
+      <p>Before creating a group, Feature Store checks the bucket's access settings, which needs <code>s3:GetBucketAcl</code>. If you build your own role and leave it out, the error starts with <strong>Invalid S3Uri provided</strong>, even though the URI is fine. The real cause is further down in the same message.</p></div>
+  </div>
+</section>
+
+<!-- ================= 5 ================= -->
+<section id="s5">
+  <h2 class="sec"><span class="num">05</span>Ingesting the features</h2>
+  <p>The feature group is ready, but it is empty. <code>ingest.py</code> fills it in three steps.</p>
+  <ol>
+    <li>It reads the raw file from S3 and runs <code>customer_features</code> on it. That gives the 15,598 rows.</li>
+    <li>It sends each row to Feature Store with <code>put_record</code>. One call writes one record.</li>
+    <li>It keeps eight of those calls going at the same time.</li>
+  </ol>
+  <p><code>put_record</code> is not on the <code>sagemaker</code> client that created the group. Records are written and read through their own client, <code>sagemaker-featurestore-runtime</code>, just as the previous lesson called endpoints through <code>sagemaker-runtime</code>. Each call takes the group's name and one record as a list of feature names and values. Every value is sent as a string, even the numbers; the types in the feature group decide how each is stored.</p>
+  <p>Step 3 is about speed. A call spends almost all of its time waiting for an answer over the network, and there are 15,598 calls to make. Python's <code>ThreadPoolExecutor</code> keeps eight going at once, so while one waits, the others are already on their way.</p>
+  <details class="code"><summary>ingest.py<small>8 threads, one put_record per row</small></summary><div class="cw"><button class="cp">Copy</button><pre><code data-src="c-ingest" data-lang="py"></code></pre></div></details>
+
+  <div class="callout gray">
+    <h5>Run it once</h5>
+    <p>A second run writes every record again, and the offline store keeps both copies, as section 9 shows.</p>
+  </div>
+
+  <h3><span class="n">5.1</span>Did it arrive? Asking Athena</h3>
+  <p><code>put_record</code> returning without an error only means Feature Store <em>accepted</em> the record. It does not mean the record is in the offline store yet. To know that, you have to look in the offline store, and that is Athena's job. Athena runs SQL on the files in S3, and the Glue table from section 4 tells it what columns they have. There is no server to look after, and Athena bills by the data each query reads.</p>
+  <p>Several scripts from here on send queries to Athena, so <code>query.py</code> holds the shared part. Its function <code>run(sql)</code> starts a query with <code>start_query_execution</code> on boto3's <code>athena</code> client and checks every second until it has finished. Athena writes every result to S3 as a CSV file, here under <code>athena/</code> in your bucket. <code>run</code> reads that file back and returns a pandas DataFrame. On import, the file also asks the feature group for its Glue database and table with <code>describe_feature_group</code>, so no table name is typed by hand.</p>
+  <details class="code"><summary>query.py<small>shared Athena helper</small></summary><div class="cw"><button class="cp">Copy</button><pre><code data-src="c-query" data-lang="py"></code></pre></div></details>
+  <p><code>wait_offline.py</code> watches the offline store fill up. Every 30 seconds it counts the files in the group's S3 folder. Once there are some, it also counts the rows Athena can see. It stops when Athena sees all 15,598 rows, or after 25 minutes with a message saying how far it got. Both scripts print the clock time when they start and end, so their outputs can be lined up.</p>
+  <details class="code"><summary>wait_offline.py<small>polls files in S3, then rows in Athena</small></summary><div class="cw"><button class="cp">Copy</button><pre><code data-src="c-wait" data-lang="py"></code></pre></div></details>
+  <div class="out"><div class="lab">Output · ingest.py</div><pre><code data-src="o-ingest" data-lang="out"></code></pre></div>
+  <div class="out"><div class="lab">Output · wait_offline.py, run at the same time</div><pre><code data-src="o-wait" data-lang="out"></code></pre></div>
+
+  <figure class="viz" aria-labelledby="latcap">
+    <figcaption class="cap" id="latcap">Visualizer · The silent gap between "written" and "visible"</figcaption>
+    <p class="sub">Hover or focus any marker. Eight threads wrote all 15,598 records in 22 seconds and every call succeeded. For the next five minutes the offline store showed nothing at all.</p>
+    <div id="lat"></div>
+    <div class="read" style="margin-top:14px">
+      <div><small>Write phase</small><b>22 s</b></div>
+      <div><small>First seen in store</small><b>338 s</b></div>
+      <div><small>Gap after last write</small><b>5 m 16 s</b></div>
+      <div><small>Files / rows</small><b>10,863 / 15,598</b></div>
+    </div>
+  </figure>
+  <p><code>ingest.py</code> finished at 08:48:57. Yet for the first 301 seconds the offline store had no files at all. The next check, at 338 seconds, found 10,863 files and Athena saw all 15,598 rows at once, at 08:54:13, 5 minutes 16 seconds after the last record was written.</p>
+  <div class="callout">
+    <h5>The quiet part of an offline store</h5>
+    <p>For more than five minutes after every write had succeeded, a training set built from the store would have had no rows at all. Every query would have succeeded, and nothing would have said the data was missing. The safe habit: <strong>count the rows you wrote, count the rows the offline store has, and only build training data when they match.</strong></p>
+  </div>
+
+  <h3><span class="n">5.2</span>Small files, and where they live</h3>
+  <p>15,598 rows arrived as 10,863 files, about 1.4 rows per file. Feature Store writes the offline store in small batches as records come in, and never merges them. For a few thousand customers that does not matter. For millions of records it makes every Athena query slower, because each query has to open every file. That is one reason AWS also offers the Apache Iceberg table format for the offline store, which can merge small files. This read keeps the default format, because its files are the easiest to look at.</p>
+
+  <figure class="viz" aria-labelledby="partcap">
+    <figcaption class="cap" id="partcap">Visualizer · Where a record lands in S3</figcaption>
+    <p class="sub">Select a path segment. Folders are named after the record's <strong>event time</strong>, not the time it was written.</p>
+    <div class="chain" id="chain"></div>
+    <div class="info" id="chaininfo" aria-live="polite"></div>
+    <p class="note">A row stamped 13 October 2025 lands in <code>year=2025/month=10/day=13/hour=00/</code> even though it was written today. Folders like these are called <strong>partitions</strong>. That one folder holds 29 files of about 2 KB each, the small-files point from above made visible.</p>
+  </figure>
+</section>
+
+<!-- ================= 6 ================= -->
+<section id="s6">
+  <h2 class="sec"><span class="num">06</span>Querying the offline store with Athena</h2>
+  <p>The offline store now has all 15,598 rows. Running <code>query.py</code> itself prints three things: the table's name and every column with its type, read from Glue; the total row and customer counts; and every row stored for customer <code>C-00001</code> in event-time order.</p>
+  <div class="tw"><table>
+    <thead><tr><th class="num">rows</th><th class="num">customers</th></tr></thead>
+    <tbody><tr><td class="num">15,598</td><td class="num">1,440</td></tr></tbody></table></div>
+  <p>The table holds all 15,598 rows for all 1,440 customers. <code>C-00001</code> has 25 rows, one for every change from October 2025 to September 2026. Nothing was overwritten.</p>
+
+  <figure class="viz" aria-labelledby="histcap">
+    <figcaption class="cap" id="histcap">Visualizer · Every stored version of C-00001</figcaption>
+    <p class="sub">The 25 rows Athena returns, plotted as they changed. Select a point for the full row. An ordinary customer table would keep only the last one: 14 orders and 11 returns.</p>
+    <div class="seg" id="histseg" role="group" aria-label="Metric">
+      <button aria-pressed="true" data-m="count">Counts</button>
+      <button aria-pressed="false" data-m="rate">Return rate</button>
+    </div>
+    <div id="hist" style="margin-top:12px"></div>
+    <div class="legend" id="histleg"></div>
+    <div class="info" id="histinfo" aria-live="polite">Select or focus a point to see its row.</div>
+  </figure>
+  <p>That last row is also all the online store would hold.</p>
+
+  <h3><span class="n">6.1</span>Three clocks</h3>
+  <p>Three columns were added by Feature Store. The first two, with the <code>event_time</code> you wrote, give each record three different timestamps. Here is the first row of <code>C-00001</code>:</p>
+  <figure class="viz" aria-labelledby="clkcap">
+    <figcaption class="cap" id="clkcap">Visualizer · Event time vs write times</figcaption>
+    <div class="clocks">
+      <div class="clk"><b>event_time</b><span><em>2025-10-13T00:00:00Z</em> · when the row was <strong>true</strong>. This is the one training cares about.</span></div>
+      <div class="clk"><b>api_invocation_time</b><span><em>2026-10-15 08:48:35</em> · when the <code>put_record</code> call arrived.</span></div>
+      <div class="clk"><b>write_time</b><span><em>2026-10-15 08:53:59.250</em> · when the row was written to the offline store, a little over five minutes later: the delay section 5 measured.</span></div>
+      <div class="clk"><b>is_deleted</b><span><em>False</em> · marks rows written by a delete call. Nothing here deletes records, so every row says <em>False</em>.</span></div>
+    </div>
+    <p class="note">Neither of the two write times is the event time. They are about <em>when you wrote</em>; the event time is about <em>when it was true</em>.</p>
+  </figure>
+  <p>Look at the types too. <code>event_time</code> is a <code>string</code>, because the feature group declared it a <code>String</code>. To compare it with a date, a query has to turn it into a timestamp first, with Athena's <code>from_iso8601_timestamp</code>. The join in the next section does exactly that.</p>
+  <p>The same queries work in the Athena console, which is the quickest way to poke at the store by hand. For example, a second customer, <code>C-00002</code>, has a much shorter history of six rows, ending at 5 orders and 1 return. Athena also reports how much data a query scanned, which is what you pay for.</p>
+  <p>Every version of every customer is now one query away. The next section decides which version goes with each order.</p>
+</section>
+
+<!-- ================= 7 ================= -->
+<section id="s7">
+  <h2 class="sec"><span class="num">07</span>Point-in-time correctness</h2>
+  <p>Section 1.4 asked the key question. A customer has many rows in the offline store, so which one goes with each order? The honest answer is the row that was true just before the order was placed. Joining each order to that row is called a <strong>point-in-time join</strong>. <code>training_set.py</code> builds the training data this way, and also the easy way, so the two can be compared. It does everything with SQL, sent through <code>run</code> from <code>query.py</code>, in four steps.</p>
+  <ol>
+    <li>It gives Athena a table for the raw orders. The orders are not in the feature store; they are a plain CSV under <code>raw/events/</code>, and <code>CREATE EXTERNAL TABLE</code> lets Athena read it.</li>
+    <li>It joins each order to one customer row, once the easy way and once the honest way.</li>
+    <li>It lays out each joined row the way the XGBoost container wants it with <code>xgb_rows</code>: label first, then the numbers, then one column per category and payment method, no header.</li>
+    <li>It splits the rows by date. Orders before 1 July 2026 go to training and the rest to validation.</li>
+  </ol>
+  <p>Step 2 is where the two sets differ. Both joins read from <code>FEATURES</code>, which keeps the newest copy of each customer row, because a retried write can leave two copies (section 9).</p>
+  <div class="two">
+    <div class="card"><h5>NAIVE</h5><p>Gives every order the customer's <strong>latest</strong> row. This is what you get by joining orders to an ordinary customer table that holds today's values.</p></div>
+    <div class="card gold"><h5>PIT</h5><p>Gives every order the latest row from <strong>strictly before</strong> the order date. It turns both dates into timestamps, ranks matching rows newest first with <code>row_number()</code>, and keeps the top one.</p></div>
+  </div>
+  <p>In the honest join, an order with no row before it, such as a customer's first order, gets 0 orders, 0 returns and a return rate of 0.2 from <code>FILL</code>. Its tenure is still known from <code>signup_date</code>, so the SQL works it out with <code>date_diff</code>.</p>
+
+  <figure class="viz" aria-labelledby="pitcap">
+    <figcaption class="cap" id="pitcap">Visualizer · Point-in-time join explorer</figcaption>
+    <p class="sub">Pick one of <code>C-00001</code>'s 14 orders and see which feature row each join hands it. Then switch the comparison from <code>&lt;</code> to <code>&lt;=</code> to see how a single character leaks the order itself.</p>
+    <div class="row">
+      <div><label class="lb" for="pitOrder">Order</label><select id="pitOrder"></select></div>
+      <div><span class="lb" id="pitModeLb">Join condition</span>
+        <div class="seg" id="pitMode" role="group" aria-labelledby="pitModeLb">
+          <button aria-pressed="true" data-m="lt">event_time &lt; order date</button>
+          <button aria-pressed="false" data-m="le">event_time &lt;= order date</button>
+        </div></div>
+    </div>
+    <div id="pit"></div>
+    <div class="legend" id="pitleg"></div>
+    <div class="tw" style="margin-top:16px"><table id="pitTbl"></table></div>
+    <div class="info" id="pitInfo" aria-live="polite"></div>
+  </figure>
+
+  <h3><span class="n">7.1</span>Why strictly before</h3>
+  <p>A row's counts include the order placed at its own moment. <code>C-00001</code> placed an order on 22 December 2025, and the row stamped 22 December already counts it, with <code>orders_so_far</code> at 4. At checkout, that order has not been counted yet. The checkout would see the row before, from 21 December, with 3 orders and 2 returns. So the join must use <code>&lt;</code>, not <code>&lt;=</code>.</p>
+  <div class="callout">
+    <h5>One character, every order</h5>
+    <p>With <code>&lt;=</code>, the mistake would not hit a few orders. It would hit all of them. <code>features.py</code> writes a row on the day of every order, so every one of the 12,000 orders would be joined to its own day's row, which already counts the order being predicted. No order would be left without a row either, so the result would look <em>tidier</em>, not worse.</p>
+  </div>
+
+  <details class="code"><summary>training_set.py<small>Athena SQL: naive and point-in-time joins</small></summary><div class="cw"><button class="cp">Copy</button><pre><code data-src="c-training" data-lang="py"></code></pre></div></details>
+  <div class="out"><div class="lab">Output</div><pre><code data-src="o-training" data-lang="out"></code></pre></div>
+
+  <figure class="viz" aria-labelledby="splitcap">
+    <figcaption class="cap" id="splitcap">Visualizer · Same orders, same split, different rows</figcaption>
+    <div class="wf">
+      <div class="r"><span>Training · before 1 Jul 2026</span><div class="tr"><div class="bar tot" style="left:0;width:75.1%"></div></div><span class="v">9,014</span></div>
+      <div class="r"><span>Validation · from 1 Jul 2026</span><div class="tr"><div class="bar g" style="left:75.1%;width:24.9%"></div></div><span class="v">2,986</span></div>
+    </div>
+    <div class="two" style="margin-top:18px">
+      <div class="card"><h5>Naive set</h5><p>12,000 orders, <strong>0</strong> without a feature row, because every customer has a latest row. 19 columns.</p></div>
+      <div class="card gold"><h5>Point-in-time set</h5><p>12,000 orders, <strong>1,456</strong> without a feature row: each customer's first order, plus any second order placed on the same day. The join is strict, so a row stamped on the order's own day does not count. Same 19 columns.</p></div>
+    </div>
+    <p class="note">Both sets have the same orders and the same 19 columns: the label and 18 numbers. The only difference is which customer row each order got.</p>
+  </figure>
+</section>
+
+<!-- ================= 8 ================= -->
+<section id="s8">
+  <h2 class="sec"><span class="num">08</span>Training on the feature store's data</h2>
+  <p>Two training sets now sit in the bucket. Training on them works as in the previous lesson, with its <code>train.py</code> and a few changes. It takes <code>naive</code> or <code>pit</code> from the command line and puts that word in the job name and the output path. The training and validation channels point at that set's files. The container, the machine and every hyperparameter are the same as before.</p>
+  <div class="tw"><table>
+    <thead><tr><th>Setting</th><th>Value</th></tr></thead>
+    <tbody>
+      <tr><td>Container</td><td><code>sagemaker-xgboost:1.7-1</code></td></tr>
+      <tr><td>Machine</td><td><code>ml.m5.large</code>, 1 instance, 5 GB volume</td></tr>
+      <tr><td>objective / eval_metric</td><td><code>binary:logistic</code> / <code>auc</code></td></tr>
+      <tr><td>num_round · eta · max_depth</td><td>200 · 0.1 · 4</td></tr>
+    </tbody></table></div>
+  <details class="code"><summary>train.py<small>python train.py naive | pit</small></summary><div class="cw"><button class="cp">Copy</button><pre><code data-src="c-train" data-lang="py"></code></pre></div></details>
+  <div class="out"><div class="lab">Output · python train.py naive</div><pre><code data-src="o-train-naive" data-lang="out"></code></pre></div>
+  <div class="out"><div class="lab">Output · python train.py pit</div><pre><code data-src="o-train-pit" data-lang="out"></code></pre></div>
+  <p>Each job reports AUC on its own validation set. The naive model scored 0.832. The point-in-time model scored 0.721. If this were all you saw, you would ship the naive one. It looks about 0.11 better.</p>
+  <p>But the naive model was checked on <em>naive</em> rows. Its validation rows carry each customer's latest values too, so it was graded on the same leak it learned from. The question that matters is how it does on the rows it will really get in production, where the features come from before each order. The point-in-time validation rows are exactly that.</p>
+
+  <h3><span class="n">8.1</span>Scoring both models on honest rows</h3>
+  <p><code>score.py</code> does this in three steps. The model runs on the space itself, so no endpoint is needed.</p>
+  <ol>
+    <li>It asks SageMaker for the newest finished training job with <code>naive</code> or <code>pit</code> in its name, with <code>list_training_jobs</code>, and finds where that job saved its model.</li>
+    <li>It downloads the job's <code>model.tar.gz</code> from S3 and unpacks it. Inside is one file, <code>xgboost-model</code>, which the <code>xgboost</code> library loads with <code>load_model</code>.</li>
+    <li>It scores the point-in-time validation rows, <code>fs-validation/pit/validation.csv</code>, and prints the AUC, worked out with scikit-learn's <code>roc_auc_score</code>.</li>
+  </ol>
+  <details class="code"><summary>score.py<small>score a model on honest rows</small></summary><div class="cw"><button class="cp">Copy</button><pre><code data-src="c-score" data-lang="py"></code></pre></div></details>
+
+  <figure class="viz" aria-labelledby="auccap">
+    <figcaption class="cap" id="auccap">Visualizer · The leak, measured in AUC</figcaption>
+    <p class="sub">Hover or focus a bar. The gold bar is what matters: AUC on the rows each model will really see in production.</p>
+    <div id="auc"></div>
+    <div class="legend" id="aucleg"></div>
+    <details style="margin-top:14px"><summary style="cursor:pointer;color:var(--mut);font-size:14px">View as table</summary>
+      <div class="tw"><table>
+        <thead><tr><th>Model</th><th class="num">train:auc</th><th class="num">validation:auc (own set)</th><th class="num">AUC on honest rows</th></tr></thead>
+        <tbody><tr><td>Naive</td><td class="num">0.889</td><td class="num">0.832</td><td class="num">0.714</td></tr>
+        <tr><td>Point-in-time</td><td class="num">0.821</td><td class="num">0.721</td><td class="num">0.721</td></tr></tbody></table></div></details>
+  </figure>
+  <p>The honest model scored 0.721, the same as its training job reported, because it is the same model on the same rows. That agreement is a useful check that <code>score.py</code> reads the files the way the container did. The naive model scored 0.714 on honest rows. Its offline score of 0.832 was off by 0.118, about 0.12. Served honestly, it is no better than the honest model, and here slightly worse.</p>
+  <div class="callout">
+    <h5>The real damage</h5>
+    <p>The model itself is not much worse. What goes wrong is every decision made from the 0.832. A team would expect a far better model than it got, and the drop would only show up after launch. Nothing in the training job reports a problem. Only a validation set built the honest way tells the truth.</p>
+  </div>
+
+  <h3><span class="n">8.2</span>Why the latest row scores so well</h3>
+  <p>Look at <code>C-00001</code> again. Their latest row says 14 orders and 11 returns. The naive join gives that same row to every one of their orders, even the first one in October 2025. So every training row already knows how many of the customer's orders will come back, including the order being scored. The honest row for the 22 December order says 3 orders and 2 returns, which is all the shop knew that day. (Try it in the explorer above.)</p>
+  <p>A model trained on the latest rows learns to read those future returns. Its validation rows hold them too, so it scores well there. At checkout they are not there, and the score falls to what section 8.1 measured.</p>
+
+  <h3><span class="n">8.3</span>When a feature store is more than you need</h3>
+  <p>Look at what did the work here. The offline store kept every row, but it did not pick the right row for each order. The SQL in <code>training_set.py</code> did that. For one model trained and scored in batch, a table of dated customer rows in S3, joined with the same SQL, gives exactly the same correctness with no feature group at all.</p>
+  <div class="two">
+    <div class="card"><h5>Serving</h5><p>In the next part, the online store gives an endpoint the latest row in milliseconds, written by the same code that wrote the training rows.</p></div>
+    <div class="card"><h5>Sharing</h5><p>When several models or teams use the same customer features, one feature group saves each of them from counting orders its own way.</p></div>
+  </div>
+</section>
+
+<!-- ================= 9 ================= -->
+<section id="s9">
+  <h2 class="sec"><span class="num">09</span>Failure modes</h2>
+  <p>A wrong join is one way to spoil training data. Bad records are the other. Feature Store checks some things when you write, and lets others through without a word. <code>failures.py</code> writes deliberately bad records, so you can see each one before you meet it in real data. Its bad writes go to a separate, throwaway feature group, <code>returns-failures</code>, with the same features, created by the file itself the first time it is needed.</p>
+  <p>The file takes one word that picks the test: <code>types</code> writes bad values for number features; <code>event_time</code> writes event times in different formats; <code>show</code> reads back what the throwaway group kept; <code>duplicate</code> writes five rows to the real group a second time. For each record the first two print <code>accepted</code>, or <code>REJECTED</code> with the error Feature Store sent back.</p>
+  <details class="code"><summary>failures.py<small>python failures.py types | event_time | show | duplicate</small></summary><div class="cw"><button class="cp">Copy</button><pre><code data-src="c-fail" data-lang="py"></code></pre></div></details>
+
+  <h3><span class="n">9.1</span>Types</h3>
+  <p>A tempting shortcut is to read the data with pandas and turn each column's dtype into a feature type. Tried on two lines of CSV, it goes wrong twice, and nothing complains.</p>
+  <div class="tw"><table>
+    <thead><tr><th>Column</th><th>What the CSV holds</th><th>pandas reads it as</th><th>Guessed type</th><th>Right answer</th></tr></thead>
+    <tbody>
+      <tr><td><code>customer_id</code></td><td class="mono">00123</td><td>int64 → <code>123</code>, leading zeros gone</td><td>Integral</td><td><span class="badge ok">String</span></td></tr>
+      <tr><td><code>orders_so_far</code></td><td class="mono">3, (missing)</td><td>float64 → <code>3.0</code>, <code>NaN</code></td><td>Fractional</td><td><span class="badge ok">Integral</span></td></tr>
+    </tbody></table></div>
+  <p>That is why <code>create_feature_group.py</code> writes every type out by hand. Now, what the store itself does with bad values:</p>
+
+  <figure class="viz" aria-labelledby="wtcap">
+    <figcaption class="cap" id="wtcap">Visualizer · Write tester</figcaption>
+    <p class="sub">What <code>put_record</code> did with each value. Select a row for the store's own message.</p>
+    <div class="seg" id="wtseg" role="group" aria-label="Test">
+      <button aria-pressed="true" data-t="types">Values for number features</button>
+      <button aria-pressed="false" data-t="time">Event time formats</button>
+    </div>
+    <div class="tw" style="margin-top:14px"><table id="wtTbl"></table></div>
+    <div class="info" id="wtInfo" aria-live="polite"></div>
+  </figure>
+  <p>The first three bad values (<code>"3.0"</code>, <code>"abc"</code>, <code>"nan"</code>) were <strong>rejected</strong>, with a message naming the feature and the type, and so was <code>"nan"</code> for <code>return_rate</code>, which is <code>Fractional</code>. These are the safe failures. A column that pandas quietly turned into decimals would hit the first one, because <code>str(3.0)</code> is <code>"3.0"</code>, and <code>put_record</code> would refuse it loudly.</p>
+  <div class="callout">
+    <h5>The one that gets through</h5>
+    <p><code>"007"</code> was <strong>accepted</strong>. The store read it as the number 7, and the offline store confirms it: <code>C-TYPE-3</code> is stored with <code>orders_so_far = 7</code>. For a count that does not matter. For an ID declared <code>Integral</code>, it means <code>007</code> and <code>7</code> become the same customer, and no error ever says so. <strong>Keep IDs as <code>String</code>.</strong></p>
+  </div>
+
+  <h3><span class="n">9.2</span>Event time</h3>
+  <p>Event time is checked strictly. A space instead of the <code>T</code> was rejected, and so were both kinds of epoch number, in milliseconds and in seconds. The space is the one to remember, because it is exactly what <code>str()</code> gives for a pandas timestamp. Had <code>features.py</code> not formatted <code>event_time</code> itself, every write in <code>ingest.py</code> would have failed this way.</p>
+  <p>The message lists two formats, with and without milliseconds, so <code>.123Z</code> was accepted as it says. A <code>+05:30</code> offset is not in the list, and it was accepted anyway. Athena's <code>from_iso8601_timestamp</code> still reads such a time correctly, but as plain text, times with different offsets no longer sort in time order, so a text comparison would go wrong. <strong>Pick one format and write it everywhere.</strong></p>
+  <p>Reading back what the throwaway group kept, only accepted calls left rows, and each accepted call adds one. The offset and milliseconds rows are stored exactly as sent, as text, because <code>event_time</code> is a <code>String</code> feature.</p>
+  <div class="tw"><table>
+    <thead><tr><th>customer_id</th><th>event_time</th><th class="num">orders_so_far</th><th class="num">return_rate</th></tr></thead>
+    <tbody>
+      <tr><td>C-TIME-1</td><td class="mono">2026-07-01T10:00:00Z</td><td class="num">1</td><td class="num">0.1667</td></tr>
+      <tr><td>C-TIME-5</td><td class="mono">2026-07-01T10:00:00+05:30</td><td class="num">1</td><td class="num">0.1667</td></tr>
+      <tr><td>C-TIME-6</td><td class="mono">2026-07-01T10:00:00.123Z</td><td class="num">1</td><td class="num">0.1667</td></tr>
+      <tr><td>C-TYPE-3</td><td class="mono">2026-07-01T00:00:00Z</td><td class="num">7</td><td class="num">0.1667</td></tr>
+    </tbody></table></div>
+
+  <h3><span class="n">9.3</span>Duplicates</h3>
+  <p>A real ingestion job sometimes fails half way, and the usual fix is to run it again. <code>failures.py duplicate</code> does what that rerun does to the rows written the first time: it writes <code>C-00001</code>'s first five rows to the real feature group again, with the same values and event times, then waits until the offline store shows them.</p>
+  <figure class="viz" aria-labelledby="dupcap">
+    <figcaption class="cap" id="dupcap">Visualizer · The offline store never replaces a record</figcaption>
+    <p class="sub">After 311 seconds, all five rows are stored twice. The copies are identical except for <code>write_time</code>.</p>
+    <div class="tw"><table>
+      <thead><tr><th>event_time</th><th class="num">orders_so_far</th><th>write_time · first run</th><th>write_time · rerun</th><th>copies</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">2025-10-13T00:00:00Z</td><td class="num">1</td><td class="mono">08:53:59.250</td><td class="mono">09:21:09.553</td><td><span class="badge ok">2</span></td></tr>
+        <tr><td class="mono">2025-10-17T00:00:00Z</td><td class="num">2</td><td class="mono">08:53:59.253</td><td class="mono">09:21:09.558</td><td><span class="badge ok">2</span></td></tr>
+        <tr><td class="mono">2025-10-27T00:00:00Z</td><td class="num">2</td><td class="mono">08:53:58.828</td><td class="mono">09:21:09.556</td><td><span class="badge ok">2</span></td></tr>
+        <tr><td class="mono">2025-12-07T00:00:00Z</td><td class="num">3</td><td class="mono">08:53:58.717</td><td class="mono">09:21:09.552</td><td><span class="badge ok">2</span></td></tr>
+        <tr><td class="mono">2025-12-21T00:00:00Z</td><td class="num">3</td><td class="mono">08:53:59.191</td><td class="mono">09:21:09.550</td><td><span class="badge ok">2</span></td></tr>
+      </tbody></table></div>
+  </figure>
+  <p>This is what the <code>FEATURES</code> step in <code>training_set.py</code> is for. It keeps only the newest copy of each customer row, so every order still matches one row. Without it, the result would depend on how the join is written. The <code>row_number()</code> join in <code>PIT</code> keeps only its top match, so it would still give one row per order. But another common way to write the join first finds each order's latest event time, then joins back to the table on that time. It would find both copies of a duplicated row, and every order matched to that row would appear twice in the training data, with no error.</p>
+
+  <div class="callout gray">
+    <h5>Try it yourself · Checkpoint</h5>
+    <p>Add a check to <code>ingest.py</code>, just before the thread pool starts, that stops the script if any row would fail or be quietly changed by the store. Check that <code>orders_so_far</code>, <code>returns_so_far</code> and <code>tenure_days</code> are whole numbers, that <code>return_rate</code> is a real number and not <code>NaN</code>, and that every <code>event_time</code> matches <code>YYYY-MM-DDTHH:MM:SSZ</code>. Then test it by changing one value in a copy of the rows.</p>
+    <p>The store caught only some of this section's mistakes, and it let <code>"007"</code> through without a word. A check in your own code is the only place all of them can be caught before anything is written.</p>
+  </div>
+</section>
+
+<!-- ================= 10 ================= -->
+<section id="s10">
+  <h2 class="sec"><span class="num">10</span>Tearing it down</h2>
+  <p>That is the last of the feature store work, so everything it made can go. It made two feature groups, 10,874 files and three Glue tables: one for each group and one for <code>orders</code>. None of them bills by the hour. But deleting a feature group does less than its name suggests, so <code>cleanup.py</code> works in three steps.</p>
+  <ol>
+    <li>It deletes both groups with <code>delete_feature_group</code> and waits until each one is gone.</li>
+    <li>It looks at what the deletes left behind: it counts the files still under <code>feature-store/</code> and asks Glue whether each group's table still exists.</li>
+    <li>It removes those leftovers: the files under <code>feature-store/</code>, <code>athena/</code>, <code>fs-train/</code> and <code>fs-validation/</code>, then every Glue table in <code>sagemaker_featurestore</code> named after a group, plus <code>orders</code>.</li>
+  </ol>
+  <p>The Glue deletes in step 3 are why the role has its own Glue policy. The role's AWS managed policies only let it delete tables whose names start with <code>sagemaker_tmp_</code>. The new policy allows <code>glue:DeleteTable</code> in the <code>sagemaker_featurestore</code> database and nothing else.</p>
+
+  <figure class="viz" aria-labelledby="invcap">
+    <figcaption class="cap" id="invcap">Visualizer · What deleting a feature group does, and does not, remove</figcaption>
+    <div class="seg" id="invseg" role="group" aria-label="Stage">
+      <button aria-pressed="true" data-s="0">Before</button>
+      <button aria-pressed="false" data-s="1">After delete_feature_group</button>
+      <button aria-pressed="false" data-s="2">After cleanup.py</button>
+    </div>
+    <div class="tw" style="margin-top:14px"><table id="invTbl"></table></div>
+    <div class="info" id="invInfo" aria-live="polite"></div>
+  </figure>
+  <p>Each feature group was deleted in 5 seconds, yet both tables were still in Glue and all 10,874 files were still in S3. Deleting a feature group removes its definition and nothing it wrote. The offline store may be the only record of what a model was trained on, so keeping it is a fair default. But a team that creates and deletes groups for tests fills its bucket and its Glue catalogue with leftovers.</p>
+  <p>Step 3 finds the tables by listing them, not by asking each group, because of one more kind of leftover. If you delete a group and create it again, say to fix a mistake in its definition, the new group gets a table with a new number. The old table stays behind, and no group points at it any more.</p>
+  <details class="code"><summary>cleanup.py<small>delete groups, then the leftovers</small></summary><div class="cw"><button class="cp">Copy</button><pre><code data-src="c-clean" data-lang="py"></code></pre></div></details>
+  <div class="out"><div class="lab">Output</div><pre><code data-src="o-clean" data-lang="out"></code></pre></div>
+
+  <h3><span class="n">10.1</span>What still bills</h3>
+  <p>The rest is the same as at the end of the previous lesson. The space, the NAT gateway and the interface endpoints bill by the hour, so stop the space, then delete the interface endpoints (every endpoint of type Interface, which is all except the S3 gateway endpoint) and the NAT gateway. A few minutes later, the Elastic IP AWS gave the NAT gateway goes away by itself. Stopping the space does not delete anything you created from it; it only stops the space's own machine. What is left costs nothing or almost nothing.</p>
+  <div class="tw"><table>
+    <thead><tr><th>Left behind</th><th>Costs</th><th>To remove it</th></tr></thead>
+    <tbody>
+      <tr><td>The space, stopped</td><td>Its 5 GB disk, a few cents a month</td><td>Delete the space in Studio</td></tr>
+      <tr><td>The domain and user profile</td><td>Nothing</td><td>Delete spaces, then the user profile, then the domain</td></tr>
+      <tr><td>The VPC, its subnets, security groups and S3 endpoint</td><td>Nothing</td><td>After the domain is gone, delete the S3 endpoint, then the VPC</td></tr>
+      <tr><td>The role</td><td>Nothing</td><td>Delete it in IAM after the domain is gone</td></tr>
+      <tr><td>The bucket, with the raw file and the two models</td><td>About 1 MB of storage</td><td>Empty it, then delete it</td></tr>
+      <tr><td>The Glue databases <code>sagemaker_featurestore</code> and <code>default</code>, now empty</td><td>Nothing</td><td>Delete them in AWS Glue under Data Catalog → Databases</td></tr>
+      <tr><td>The training jobs</td><td>Nothing</td><td>They cannot be deleted</td></tr>
+    </tbody></table></div>
+  <p>If you are done with SageMaker in this account, remove those too, in that order. A domain cannot be deleted while it still has user profiles, a user profile cannot be deleted while it still has spaces, and a VPC cannot be deleted while anything is still inside it.</p>
+</section>
+
+<!-- ================= 11 ================= -->
+<section id="s11">
+  <h2 class="sec"><span class="num">11</span>Summary</h2>
+  <p>The previous lesson's model needed the caller to send the customer's history. This read gave that history a home. <code>features.py</code> turned 12,000 orders into 15,598 customer rows, one for every moment a customer's history changed, each stamped with its event time. A feature group with only an offline store took those rows and kept every one of them, as files in S3 with a table in Glue, so that Athena can read any customer as they were at any moment.</p>
+  <ol class="take">
+    <li><strong>Written is not visible.</strong> Every write succeeded within 22 seconds, yet the offline store showed nothing for more than five minutes. A training set built in that window would have been empty without a single error. Count what you wrote against what the store has before you build anything.</li>
+    <li><strong>Point-in-time correctness is the core.</strong> Joining each order to the customer's latest row gave a model that scored 0.832 offline. Joining to the row strictly before each order gave 0.721. Served honest rows, the naive model scored 0.714: the offline score had lied by about 0.12. And <code>&lt;=</code> instead of <code>&lt;</code> would have moved every one of the 12,000 orders onto the wrong row.</li>
+    <li><strong>Failures are quiet.</strong> A role without <code>s3:GetBucketAcl</code> gets an error that blames the S3 URI. <code>"007"</code> became 7 without a word. A <code>+05:30</code> offset was let in though the message does not list it. Writing rows twice left two copies of each. Deleting a feature group left all its files and its Glue table behind. Each was caught by reading what the store actually held.</li>
+    <li><strong>The join is your SQL, not the store's.</strong> For one batch model, dated rows in S3 and the same SQL would do. The store earns its place once an endpoint needs the latest row fast, and once several models share the same features.</li>
+  </ol>
+
+  <h3>Where this goes</h3>
+  <p>The feature group has only an offline store, which is right for training and useless at checkout. The next part adds the online store, so that the endpoint can look up a customer's latest features by <code>customer_id</code> at request time and the caller sends only who is buying.</p>
+</section>
+
+<!-- ================= 12 ================= -->
+<section id="s12">
+  <h2 class="sec"><span class="num">12</span>References and further reading</h2>
+  <h4>Official documentation</h4>
+  <ul>
+    <li><a href="https://docs.aws.amazon.com/sagemaker/latest/dg/feature-store.html">Create, store, and share features with Feature Store</a>. The starting page for SageMaker Feature Store.</li>
+    <li><a href="https://docs.aws.amazon.com/sagemaker/latest/dg/feature-store-concepts.html">Feature Store concepts</a>. Record identifier, event time, feature group, offline and online store, in AWS's own words.</li>
+    <li><a href="https://docs.aws.amazon.com/sagemaker/latest/dg/feature-store-create-feature-group.html">Use Feature Store with SDK for Python (Boto3)</a>. Creating a group from code, and the Glue and Iceberg table formats.</li>
+    <li><a href="https://docs.aws.amazon.com/sagemaker/latest/dg/feature-store-offline.html">Offline store data format</a>. How the files are laid out in S3, and the extra columns Feature Store adds.</li>
+    <li><a href="https://docs.aws.amazon.com/sagemaker/latest/dg/feature-store-quotas.html">Quotas, naming rules and data types</a>. The three feature types and the event time formats.</li>
+    <li><a href="https://docs.aws.amazon.com/sagemaker/latest/dg/feature-store-ingest-data.html">Data sources and ingestion</a>. <code>PutRecord</code> and the other ways to write records.</li>
+    <li><a href="https://docs.aws.amazon.com/sagemaker/latest/dg/feature-store-athena-glue-integration.html">Create a dataset from your feature groups</a>. Querying the offline store with Athena, including point-in-time queries.</li>
+    <li><a href="https://docs.aws.amazon.com/sagemaker/latest/dg/feature-store-adding-policies.html">Adding policies to your IAM role</a>. The permissions a feature group's role needs.</li>
+    <li><a href="https://docs.aws.amazon.com/sagemaker/latest/dg/feature-store-use-with-studio.html">Using Feature Store in the console</a>. The Studio pages for looking at feature groups.</li>
+    <li><a href="https://docs.aws.amazon.com/athena/latest/ug/querying-glue-catalog.html">Querying the AWS Glue Data Catalog with Athena</a>. How Athena finds tables and columns.</li>
+  </ul>
+  <h4>Practitioner reading</h4>
+  <ul>
+    <li><a href="https://docs.feast.dev/getting-started/concepts/point-in-time-joins">Point-in-time joins, in the Feast documentation</a>. The same idea in an open source feature store, with a clear picture of which row each event gets.</li>
+  </ul>
+  <h4>Pricing</h4>
+  <ul>
+    <li><a href="https://aws.amazon.com/sagemaker/ai/pricing/">Amazon SageMaker AI pricing</a>, under Feature Store, and <a href="https://aws.amazon.com/athena/pricing/">Amazon Athena pricing</a> for the data each query scans. Prices change, so check these before relying on them.</li>
+  </ul>
+</section>
+
+</main>
+</div>
+
+<footer>Sagemaker Feature store part 1 post read</footer>
+<div id="tip" role="tooltip" hidden></div>
+
+<!-- ================= CODE SOURCES ================= -->
+<script type="text/plain" id="c-config">
+"""Settings every script in this folder shares. Change BUCKET to your own bucket."""
+BUCKET = "returns-ml-fs-demo"
+REGION = "us-east-1"
+FEATURE_GROUP = "returns-customers"
+</script>
+
+<script type="text/plain" id="c-features">
+"""Turn raw orders into customer feature rows, one row each time a customer's history changes."""
+import pandas as pd
+
+RESOLVE_DAYS = 14   # a return is only known two weeks after the order
+
+
+def customer_features(orders: pd.DataFrame) -> pd.DataFrame:
+    # Each row holds the counts as of its event_time, including an order placed at that moment.
+    # They become "before the order" only because the training join takes the latest row
+    # strictly before the order date.
+    o = orders.copy()
+    o["order_date"] = pd.to_datetime(o["order_date"])
+
+    placed = pd.DataFrame({"customer_id": o["customer_id"], "ts": o["order_date"],
+                           "d_orders": 1, "d_returns": 0})
+    back = o[o["returned"] == 1]
+    resolved = pd.DataFrame({"customer_id": back["customer_id"],
+                             "ts": back["order_date"] + pd.Timedelta(days=RESOLVE_DAYS),
+                             "d_orders": 0, "d_returns": 1})
+
+    ev = pd.concat([placed, resolved])
+    ev = ev.groupby(["customer_id", "ts"], as_index=False)[["d_orders", "d_returns"]].sum()
+    ev = ev.sort_values(["customer_id", "ts"])
+
+    ev["orders_so_far"] = ev.groupby("customer_id")["d_orders"].cumsum()
+    ev["returns_so_far"] = ev.groupby("customer_id")["d_returns"].cumsum()
+    # smoothed toward 20%; orders under 14 days old count in the denominator
+    # before their outcome is known
+    ev["return_rate"] = ((ev["returns_so_far"] + 1) / (ev["orders_so_far"] + 5)).round(4)
+
+    signup = o.groupby("customer_id")["signup_date"].first().pipe(pd.to_datetime)
+    ev["tenure_days"] = (ev["ts"] - ev["customer_id"].map(signup)).dt.days
+    ev["event_time"] = ev["ts"].dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    cols = ["customer_id", "event_time", "orders_so_far", "returns_so_far",
+            "return_rate", "tenure_days"]
+    return ev[cols].reset_index(drop=True)
+
+
+if __name__ == "__main__":
+    import boto3
+    from config import BUCKET, REGION
+    s3 = boto3.client("s3", region_name=REGION)
+    orders = pd.read_csv(s3.get_object(Bucket=BUCKET, Key="raw/events/returns_events.csv")["Body"])
+    f = customer_features(orders)
+    print("orders:", orders.shape, " feature rows:", f.shape)
+    print(f[f["customer_id"] == f["customer_id"].iloc[0]].head(8).to_string(index=False))
+</script>
+
+<script type="text/plain" id="o-features">
+orders: (12000, 12)  feature rows: (15598, 6)
+customer_id           event_time  orders_so_far  returns_so_far  return_rate  tenure_days
+    C-00001 2025-10-13T00:00:00Z              1               0       0.1667          790
+    C-00001 2025-10-17T00:00:00Z              2               0       0.1429          794
+    C-00001 2025-10-27T00:00:00Z              2               1       0.2857          804
+    C-00001 2025-12-07T00:00:00Z              3               1       0.2500          845
+    C-00001 2025-12-21T00:00:00Z              3               2       0.3750          859
+    C-00001 2025-12-22T00:00:00Z              4               2       0.3333          860
+    C-00001 2026-01-05T00:00:00Z              4               3       0.4444          874
+    C-00001 2026-03-01T00:00:00Z              5               3       0.4000          929
+</script>
+
+<script type="text/plain" id="c-count">
+"""Where the 15,598 feature rows come from: count the moments, then the ones that share a day."""
+import boto3
+import pandas as pd
+
+from config import BUCKET, REGION
+from features import RESOLVE_DAYS, customer_features
+
+s3 = boto3.client("s3", region_name=REGION)
+orders = pd.read_csv(s3.get_object(Bucket=BUCKET, Key="raw/events/returns_events.csv")["Body"])
+orders["order_date"] = pd.to_datetime(orders["order_date"])
+
+# The two kinds of moment, each as a (customer, day) pair
+placed = orders[["customer_id", "order_date"]].rename(columns={"order_date": "day"})
+back = orders[orders["returned"] == 1]
+resolved = pd.DataFrame({"customer_id": back["customer_id"],
+                         "day": back["order_date"] + pd.Timedelta(days=RESOLVE_DAYS)})
+
+order_days = placed.drop_duplicates()                            # one row per customer per order day
+all_days = pd.concat([order_days, resolved]).drop_duplicates()   # add the return days, merging same-day ones
+
+print("one row for every order:", len(placed))
+print("plus one row for every return:", len(resolved))
+print("minus orders on a day the customer had already ordered:", len(placed) - len(order_days))
+print("minus returns on a day that already had a row:", len(order_days) + len(resolved) - len(all_days))
+print("feature rows:", len(all_days))
+print("rows from customer_features:", len(customer_features(orders)))
+</script>
+
+<script type="text/plain" id="o-count">
+one row for every order: 12000
+plus one row for every return: 3977
+minus orders on a day the customer had already ordered: 200
+minus returns on a day that already had a row: 179
+feature rows: 15598
+rows from customer_features: 15598
+</script>
+
+<script type="text/plain" id="c-create">
+"""Create the customer feature group: offline store only, written to S3 and catalogued in Glue."""
+import sys
+import time
+import boto3
+from sagemaker.core.helper.session_helper import get_execution_role
+
+from config import BUCKET, REGION, FEATURE_GROUP
+
+sm = boto3.client("sagemaker", region_name=REGION)
+
+features = [("customer_id", "String"), ("event_time", "String"),
+            ("orders_so_far", "Integral"), ("returns_so_far", "Integral"),
+            ("return_rate", "Fractional"), ("tenure_days", "Integral")]
+
+try:   # safe to run twice: an existing group is left as it is
+    fg = sm.describe_feature_group(FeatureGroupName=FEATURE_GROUP)
+    print(f"{FEATURE_GROUP} already exists, status {fg['FeatureGroupStatus']}. Nothing was created.")
+    sys.exit(0)
+except sm.exceptions.ResourceNotFound:
+    pass
+
+start = time.time()
+sm.create_feature_group(
+    FeatureGroupName=FEATURE_GROUP,
+    RecordIdentifierFeatureName="customer_id",
+    EventTimeFeatureName="event_time",
+    FeatureDefinitions=[{"FeatureName": n, "FeatureType": t} for n, t in features],
+    OfflineStoreConfig={"S3StorageConfig": {"S3Uri": f"s3://{BUCKET}/feature-store"}},
+    RoleArn=get_execution_role(),
+)
+
+while (fg := sm.describe_feature_group(FeatureGroupName=FEATURE_GROUP))["FeatureGroupStatus"] == "Creating":
+    time.sleep(5)
+
+print("status:", fg["FeatureGroupStatus"], f"after {time.time() - start:.0f} s")
+if "FailureReason" in fg:
+    print("failure:", fg["FailureReason"])
+cat = fg["OfflineStoreConfig"]["DataCatalogConfig"]
+print("glue table:", f'{cat["Database"]}.{cat["TableName"]}')
+print("offline store:", fg["OfflineStoreConfig"]["S3StorageConfig"]["ResolvedOutputS3Uri"])
+</script>
+
+<script type="text/plain" id="o-create">
+status: Created after 27 s
+glue table: sagemaker_featurestore.returns_customers_1792054063
+offline store: s3://returns-ml-fs-demo/feature-store/111122223333/sagemaker/us-east-1/offline-store/returns-customers-1792054063/data
+</script>
+
+<script type="text/plain" id="c-ingest">
+"""Compute customer feature rows from the raw orders and write each one to the feature group."""
+import time
+from concurrent.futures import ThreadPoolExecutor
+import boto3
+import pandas as pd
+
+from config import BUCKET, REGION, FEATURE_GROUP
+from features import customer_features
+
+s3 = boto3.client("s3", region_name=REGION)
+runtime = boto3.client("sagemaker-featurestore-runtime", region_name=REGION)
+
+print("start", time.strftime("%H:%M:%S"))
+orders = pd.read_csv(s3.get_object(Bucket=BUCKET, Key="raw/events/returns_events.csv")["Body"])
+rows = customer_features(orders)
+print("orders:", len(orders), " feature rows:", len(rows))
+
+
+def put(row):
+    # every value travels as a string; the feature group's types decide how it is stored
+    record = [{"FeatureName": name, "ValueAsString": str(value)} for name, value in row.items()]
+    runtime.put_record(FeatureGroupName=FEATURE_GROUP, Record=record)
+
+
+start = time.time()
+with ThreadPoolExecutor(max_workers=8) as pool:   # one call per row; 8 at a time
+    list(pool.map(put, rows.to_dict("records")))
+print(f"wrote {len(rows)} records in {time.time() - start:.0f} s")
+print("end", time.strftime("%H:%M:%S"))
+</script>
+
+<script type="text/plain" id="c-query">
+"""Run SQL against the offline store with Athena and read the result into a DataFrame."""
+import time
+import boto3
+import pandas as pd
+
+from config import BUCKET, REGION, FEATURE_GROUP
+
+athena = boto3.client("athena", region_name=REGION)
+s3 = boto3.client("s3", region_name=REGION)
+
+catalog = boto3.client("sagemaker", region_name=REGION).describe_feature_group(
+    FeatureGroupName=FEATURE_GROUP)["OfflineStoreConfig"]["DataCatalogConfig"]
+DATABASE, TABLE = catalog["Database"], catalog["TableName"]
+
+
+def run(sql):
+    """Start a query, wait for it, return the rows as a DataFrame (Athena writes them to S3 as CSV)."""
+    qid = athena.start_query_execution(
+        QueryString=sql, QueryExecutionContext={"Database": DATABASE},
+        ResultConfiguration={"OutputLocation": f"s3://{BUCKET}/athena/"})["QueryExecutionId"]
+    while (q := athena.get_query_execution(QueryExecutionId=qid)["QueryExecution"])["Status"]["State"] in ("QUEUED", "RUNNING"):
+        time.sleep(1)
+    if q["Status"]["State"] != "SUCCEEDED":
+        raise RuntimeError(q["Status"].get("StateChangeReason", q["Status"]["State"]))
+    key = q["ResultConfiguration"]["OutputLocation"].split(f"s3://{BUCKET}/", 1)[1]
+    return pd.read_csv(s3.get_object(Bucket=BUCKET, Key=key)["Body"]) if key.endswith(".csv") else None
+
+
+if __name__ == "__main__":
+    print("table:", f"{DATABASE}.{TABLE}")
+    columns = boto3.client("glue", region_name=REGION).get_table(
+        DatabaseName=DATABASE, Name=TABLE)["Table"]["StorageDescriptor"]["Columns"]
+    print("columns:", ", ".join(f'{c["Name"]} {c["Type"]}' for c in columns))
+    print(run(f"SELECT COUNT(*) AS rows, COUNT(DISTINCT customer_id) AS customers FROM {TABLE}").to_string(index=False))
+    print(run(f"""SELECT customer_id, event_time, orders_so_far, returns_so_far, return_rate, tenure_days,
+                         write_time, api_invocation_time, is_deleted
+                  FROM {TABLE} WHERE customer_id = 'C-00001' ORDER BY event_time""").to_string(index=False))
+</script>
+
+<script type="text/plain" id="c-wait">
+"""Watch the offline store fill up: first files in S3, then rows visible to Athena."""
+import sys
+import time
+import boto3
+
+from config import BUCKET, REGION, FEATURE_GROUP
+from query import run, TABLE
+
+EXPECTED = int(sys.argv[1]) if len(sys.argv) > 1 else 15598   # rows ingest.py wrote
+s3 = boto3.client("s3", region_name=REGION)
+uri = boto3.client("sagemaker", region_name=REGION).describe_feature_group(
+    FeatureGroupName=FEATURE_GROUP)["OfflineStoreConfig"]["S3StorageConfig"]["ResolvedOutputS3Uri"]
+PREFIX = uri.split(f"s3://{BUCKET}/", 1)[1]   # this group's folder only
+start = time.time()
+print("start", time.strftime("%H:%M:%S"))
+
+
+def files():
+    pages = s3.get_paginator("list_objects_v2").paginate(Bucket=BUCKET, Prefix=PREFIX)
+    return sum(page.get("KeyCount", 0) for page in pages)
+
+
+while (n := files()) == 0:
+    print(f"{time.strftime('%H:%M:%S')}  {time.time() - start:5.0f} s  files: 0")
+    if time.time() - start > 25 * 60:
+        sys.exit("no files after 25 minutes. Check that ingest.py ran against this feature group.")
+    time.sleep(30)
+
+while time.time() - start < 25 * 60:
+    rows = run(f"SELECT COUNT(*) AS n FROM {TABLE}")["n"][0]
+    print(f"{time.strftime('%H:%M:%S')}  {time.time() - start:5.0f} s  files: {files():4d}  rows in Athena: {rows}")
+    if rows >= EXPECTED:
+        break
+    time.sleep(30)
+else:
+    print(f"stopped after 25 minutes with {rows} of {EXPECTED} rows visible")
+print("end", time.strftime("%H:%M:%S"))
+</script>
+
+<script type="text/plain" id="o-ingest">
+start 08:48:35
+orders: 12000  feature rows: 15598
+wrote 15598 records in 22 s
+end 08:48:57
+</script>
+
+<script type="text/plain" id="o-wait">
+start 08:48:36
+08:48:36      0 s  files: 0
+08:49:06     30 s  files: 0
+08:49:36     60 s  files: 0
+08:50:06     90 s  files: 0
+08:50:36    120 s  files: 0
+08:51:06    150 s  files: 0
+08:51:36    180 s  files: 0
+08:52:06    210 s  files: 0
+08:52:36    240 s  files: 0
+08:53:06    271 s  files: 0
+08:53:36    301 s  files: 0
+08:54:13    338 s  files: 10863  rows in Athena: 15598
+end 08:54:15
+</script>
+
+<script type="text/plain" id="c-training">
+"""Join orders to customer features in Athena, naive and point-in-time, and write XGBoost CSVs."""
+import boto3
+import pandas as pd
+
+from config import BUCKET, REGION
+from query import run, DATABASE, TABLE
+
+s3 = boto3.client("s3", region_name=REGION)
+CUT = "2026-07-01"
+ORDER_COLS = ["price", "discount_pct", "delivery_days", "is_gift", "seller_rating"]
+FEAT_COLS = ["orders_so_far", "returns_so_far", "return_rate", "tenure_days"]
+FILL = {"orders_so_far": 0, "returns_so_far": 0, "return_rate": 0.2}   # tenure is worked out in the SQL
+DUMMIES = {"category": ["apparel", "beauty", "books", "electronics", "home"],
+           "payment_method": ["card", "cod", "upi", "wallet"]}
+
+# Athena reads the raw orders CSV in place once it has a table definition.
+run(f"""CREATE EXTERNAL TABLE IF NOT EXISTS orders (
+          order_id string, customer_id string, order_date string, category string, price double,
+          discount_pct int, delivery_days int, payment_method string, is_gift int,
+          seller_rating double, returned int, signup_date string)
+        ROW FORMAT DELIMITED FIELDS TERMINATED BY ','
+        LOCATION 's3://{BUCKET}/raw/events/'
+        TBLPROPERTIES ('skip.header.line.count'='1')""")
+
+# With no feature row before the order, tenure still has an honest value, from the sign up date.
+TENURE = "COALESCE(f.tenure_days, date_diff('day', CAST(o.signup_date AS date), CAST(o.order_date AS date))) AS tenure_days"
+COLS = "f.orders_so_far, f.returns_so_far, f.return_rate, " + TENURE
+
+# The offline store keeps every write, so a retried write leaves two copies. Keep the newest.
+FEATURES = f"""features AS (
+  SELECT * FROM (SELECT *, row_number() OVER (PARTITION BY customer_id, event_time
+                                              ORDER BY write_time DESC, api_invocation_time DESC) AS copy
+                 FROM {TABLE}) WHERE copy = 1)"""
+
+NAIVE = f"""WITH {FEATURES},
+latest AS (SELECT *, row_number() OVER (PARTITION BY customer_id ORDER BY from_iso8601_timestamp(event_time) DESC) AS r
+           FROM features)
+SELECT o.*, {COLS}
+FROM orders o LEFT JOIN latest f ON f.customer_id = o.customer_id AND f.r = 1"""
+
+PIT = f"""WITH {FEATURES},
+matched AS (
+  SELECT o.*, {COLS},
+         row_number() OVER (PARTITION BY o.order_id ORDER BY from_iso8601_timestamp(f.event_time) DESC) AS r
+  FROM orders o LEFT JOIN features f
+    ON f.customer_id = o.customer_id
+   AND from_iso8601_timestamp(f.event_time) < CAST(o.order_date AS timestamp))
+SELECT * FROM matched WHERE r = 1"""
+
+
+def xgb_rows(d):
+    """Label first, then numbers, then one-hot columns in a fixed order. No header."""
+    d = d.fillna(FILL)
+    X = d[ORDER_COLS + FEAT_COLS].copy()
+    for col, values in DUMMIES.items():
+        for v in values:
+            X[f"{col}_{v}"] = (d[col] == v).astype(int)
+    return pd.concat([d["returned"], X], axis=1)
+
+
+for name, sql in [("naive", NAIVE), ("pit", PIT)]:
+    d = run(sql + " ORDER BY order_id")
+    rows = xgb_rows(d)
+    train, val = rows[d.order_date < CUT], rows[d.order_date >= CUT]
+    s3.put_object(Bucket=BUCKET, Key=f"fs-train/{name}/train.csv", Body=train.to_csv(header=False, index=False))
+    s3.put_object(Bucket=BUCKET, Key=f"fs-validation/{name}/validation.csv", Body=val.to_csv(header=False, index=False))
+    print(f"{name:5s} orders: {len(d)}  no feature row: {d.orders_so_far.isna().sum()}  "
+          f"train: {train.shape}  validation: {val.shape}")
+print("columns:", ", ".join(rows.columns))
+</script>
+
+<script type="text/plain" id="o-training">
+naive orders: 12000  no feature row: 0  train: (9014, 19)  validation: (2986, 19)
+pit   orders: 12000  no feature row: 1456  train: (9014, 19)  validation: (2986, 19)
+columns: returned, price, discount_pct, delivery_days, is_gift, seller_rating, orders_so_far, returns_so_far, return_rate, tenure_days, category_apparel, category_beauty, category_books, category_electronics, category_home, payment_method_card, payment_method_cod, payment_method_upi, payment_method_wallet
+</script>
+
+<script type="text/plain" id="c-train">
+"""Train on one of the two training sets built from the feature store: python train.py naive|pit"""
+import sys
+
+from sagemaker.core import image_uris
+from sagemaker.core.helper.session_helper import get_execution_role
+from sagemaker.core.training.configs import Compute, InputData, OutputDataConfig
+from sagemaker.train import ModelTrainer
+
+from config import BUCKET, REGION
+
+TRAINING_SET = sys.argv[1]   # "naive" or "pit"
+
+image = image_uris.retrieve("xgboost", REGION, "1.7-1")
+print("image:", image)
+
+trainer = ModelTrainer(
+    training_image=image,
+    role=get_execution_role(),
+    base_job_name=f"returns-fs-{TRAINING_SET}",
+    compute=Compute(instance_type="ml.m5.large", instance_count=1, volume_size_in_gb=5),
+    hyperparameters={
+        "objective": "binary:logistic",
+        "eval_metric": "auc",
+        "num_round": 200,
+        "eta": 0.1,
+        "max_depth": 4,
+    },
+    output_data_config=OutputDataConfig(s3_output_path=f"s3://{BUCKET}/output/{TRAINING_SET}/"),
+)
+
+trainer.train(
+    input_data_config=[
+        InputData(channel_name="train", data_source=f"s3://{BUCKET}/fs-train/{TRAINING_SET}/", content_type="text/csv"),
+        InputData(channel_name="validation", data_source=f"s3://{BUCKET}/fs-validation/{TRAINING_SET}/", content_type="text/csv"),
+    ],
+    wait=True,
+    logs=False,
+)
+
+job = trainer._latest_training_job  # the TrainingJob the SDK just ran
+print("job:", job.training_job_name, job.training_job_status)
+print("billable seconds:", job.billable_time_in_seconds)
+print("final metrics:", {m.metric_name: round(m.value, 3) for m in job.final_metric_data_list})
+print("model:", job.model_artifacts.s3_model_artifacts)
+</script>
+
+<script type="text/plain" id="o-train-naive">
+image: 683313688378.dkr.ecr.us-east-1.amazonaws.com/sagemaker-xgboost:1.7-1
+job: returns-fs-naive-20261015090206 Completed
+billable seconds: 130
+final metrics: {'validation:auc': 0.832, 'train:auc': 0.889}
+model: s3://returns-ml-fs-demo/output/naive/returns-fs-naive-20261015090206/output/model.tar.gz
+</script>
+
+<script type="text/plain" id="o-train-pit">
+image: 683313688378.dkr.ecr.us-east-1.amazonaws.com/sagemaker-xgboost:1.7-1
+job: returns-fs-pit-20261015090206 Completed
+billable seconds: 134
+final metrics: {'validation:auc': 0.721, 'train:auc': 0.821}
+model: s3://returns-ml-fs-demo/output/pit/returns-fs-pit-20261015090206/output/model.tar.gz
+</script>
+
+<script type="text/plain" id="c-score">
+"""Score a trained model on the honest point-in-time validation rows: python score.py naive|pit"""
+import io
+import sys
+import tarfile
+
+import boto3
+import pandas as pd
+import xgboost as xgb
+from sklearn.metrics import roc_auc_score
+
+from config import BUCKET, REGION
+
+TRAINING_SET = sys.argv[1]   # which model to score: "naive" or "pit"
+sm = boto3.client("sagemaker", region_name=REGION)
+s3 = boto3.client("s3", region_name=REGION)
+
+job = sm.list_training_jobs(NameContains=f"returns-fs-{TRAINING_SET}", StatusEquals="Completed",
+                            SortBy="CreationTime", SortOrder="Descending")["TrainingJobSummaries"][0]
+artifact = sm.describe_training_job(TrainingJobName=job["TrainingJobName"])["ModelArtifacts"]["S3ModelArtifacts"]
+key = artifact.split(f"s3://{BUCKET}/", 1)[1]
+with tarfile.open(fileobj=io.BytesIO(s3.get_object(Bucket=BUCKET, Key=key)["Body"].read())) as tar:
+    tar.extract("xgboost-model", path="/tmp", filter="data")
+booster = xgb.Booster()
+booster.load_model("/tmp/xgboost-model")
+
+# The pit validation rows hold what serving would really see: features from before each order.
+rows = pd.read_csv(io.BytesIO(s3.get_object(Bucket=BUCKET, Key="fs-validation/pit/validation.csv")["Body"].read()),
+                   header=None)
+labels, features = rows[0], rows.drop(columns=[0])
+auc = roc_auc_score(labels, booster.predict(xgb.DMatrix(features.values)))
+print("job:", job["TrainingJobName"])
+print(f"AUC on point-in-time validation rows: {auc:.3f}")
+</script>
+
+<script type="text/plain" id="c-fail">
+"""Three ways feature writes go wrong. Usage: python failures.py types|event_time|duplicate|show"""
+import io
+import sys
+import time
+import boto3
+import pandas as pd
+from botocore.exceptions import ClientError
+from sagemaker.core.helper.session_helper import get_execution_role
+
+from config import BUCKET, REGION, FEATURE_GROUP
+
+sm = boto3.client("sagemaker", region_name=REGION)
+runtime = boto3.client("sagemaker-featurestore-runtime", region_name=REGION)
+SCRATCH = FEATURE_GROUP.replace("customers", "failures")   # a throwaway group for bad writes
+
+
+def scratch_group():
+    """Create the throwaway group (same features as the real one) if it is not there yet."""
+    try:
+        sm.describe_feature_group(FeatureGroupName=SCRATCH)
+    except ClientError:
+        real = sm.describe_feature_group(FeatureGroupName=FEATURE_GROUP)
+        sm.create_feature_group(
+            FeatureGroupName=SCRATCH, RecordIdentifierFeatureName="customer_id",
+            EventTimeFeatureName="event_time", FeatureDefinitions=real["FeatureDefinitions"],
+            OfflineStoreConfig={"S3StorageConfig": {"S3Uri": f"s3://{BUCKET}/feature-store"}},
+            RoleArn=get_execution_role())
+    while sm.describe_feature_group(FeatureGroupName=SCRATCH)["FeatureGroupStatus"] == "Creating":
+        time.sleep(5)
+    return SCRATCH
+
+
+def put(group, label, **values):
+    row = {"customer_id": "C-TEST", "event_time": "2026-07-01T00:00:00Z", "orders_so_far": "1",
+           "returns_so_far": "0", "return_rate": "0.1667", "tenure_days": "10"} | values
+    try:
+        runtime.put_record(FeatureGroupName=group,
+                           Record=[{"FeatureName": k, "ValueAsString": v} for k, v in row.items()])
+        print(f"{label:38s} accepted")
+    except ClientError as e:
+        print(f"{label:38s} REJECTED: {e.response['Error']['Code']}: {e.response['Error']['Message']}")
+
+
+def types():
+    # A tempting shortcut: derive feature types from pandas dtypes.
+    guess = {"object": "String", "int64": "Integral", "float64": "Fractional"}
+    df = pd.read_csv(io.StringIO("customer_id,orders_so_far\n00123,3\n00456,\n"))
+    print(df.to_string(index=False))
+    for col in df.columns:
+        print(f"{col}: dtype {df[col].dtype} -> {guess[str(df[col].dtype)]}")
+    # Now what the store itself does with a bad value for an Integral feature.
+    group = scratch_group()
+    put(group, 'orders_so_far = "3.0"', customer_id="C-TYPE-1", orders_so_far="3.0")
+    put(group, 'orders_so_far = "abc"', customer_id="C-TYPE-2", orders_so_far="abc")
+    put(group, 'orders_so_far = "007"', customer_id="C-TYPE-3", orders_so_far="007")
+    put(group, 'orders_so_far = "nan"', customer_id="C-TYPE-4", orders_so_far="nan")
+    put(group, 'return_rate = "nan"  (str of a NaN)', customer_id="C-TYPE-5", return_rate="nan")
+
+
+def event_time():
+    group = scratch_group()
+    for i, value in enumerate(["2026-07-01T10:00:00Z", "2026-07-01 10:00:00",
+                               "1751364000000", "1751364000",
+                               "2026-07-01T10:00:00+05:30", "2026-07-01T10:00:00.123Z"], start=1):
+        put(group, f'event_time = "{value}"', customer_id=f"C-TIME-{i}", event_time=value)
+
+
+def show():
+    from query import run, DATABASE
+    table = sm.describe_feature_group(FeatureGroupName=SCRATCH)["OfflineStoreConfig"]["DataCatalogConfig"]["TableName"]
+    print(run(f"""SELECT customer_id, event_time, orders_so_far, return_rate, write_time FROM {DATABASE}.{table}
+                  WHERE customer_id LIKE 'C-T%' ORDER BY customer_id""").to_string(index=False))
+
+
+def duplicate():
+    from query import run, TABLE
+    from features import customer_features
+    s3 = boto3.client("s3", region_name=REGION)
+    orders = pd.read_csv(s3.get_object(Bucket=BUCKET, Key="raw/events/returns_events.csv")["Body"])
+    rows = customer_features(orders)
+    again = rows[rows.customer_id == "C-00001"].head(5)
+    for row in again.to_dict("records"):   # the same five rows a second time, as a retried job would
+        runtime.put_record(FeatureGroupName=FEATURE_GROUP,
+                           Record=[{"FeatureName": k, "ValueAsString": str(v)} for k, v in row.items()])
+    print("re-wrote 5 rows for C-00001; waiting for them to reach the offline store")
+    sql = f"""SELECT customer_id, event_time, COUNT(*) AS copies FROM {TABLE}
+              WHERE customer_id = 'C-00001' GROUP BY 1, 2 HAVING COUNT(*) > 1 ORDER BY 2"""
+    start = time.time()
+    while len(dups := run(sql)) < 5 and time.time() - start < 20 * 60:
+        time.sleep(30)
+    print(f"after {time.time() - start:.0f} s:")
+    print(dups.to_string(index=False))
+    print(run(f"""SELECT event_time, orders_so_far, write_time FROM {TABLE}
+                  WHERE customer_id = 'C-00001' ORDER BY event_time, write_time LIMIT 10""").to_string(index=False))
+
+
+{"types": types, "event_time": event_time, "duplicate": duplicate, "show": show}[sys.argv[1]]()
+</script>
+
+<script type="text/plain" id="c-clean">
+"""Delete the feature groups, then look at what deleting them did not remove, and remove it."""
+import time
+import boto3
+from botocore.exceptions import ClientError
+
+from config import BUCKET, REGION, FEATURE_GROUP
+
+sm = boto3.client("sagemaker", region_name=REGION)
+s3 = boto3.client("s3", region_name=REGION)
+glue = boto3.client("glue", region_name=REGION)
+DATABASE = "sagemaker_featurestore"
+GROUPS = [FEATURE_GROUP, FEATURE_GROUP.replace("customers", "failures")]
+
+
+def count(prefix):
+    pages = s3.get_paginator("list_objects_v2").paginate(Bucket=BUCKET, Prefix=prefix)
+    return sum(page.get("KeyCount", 0) for page in pages)
+
+
+tables = []
+for group in GROUPS:
+    try:
+        cat = sm.describe_feature_group(FeatureGroupName=group)["OfflineStoreConfig"]["DataCatalogConfig"]
+    except ClientError:
+        continue
+    tables.append((cat["Database"], cat["TableName"]))
+    sm.delete_feature_group(FeatureGroupName=group)
+    start = time.time()
+    while True:
+        try:
+            sm.describe_feature_group(FeatureGroupName=group)
+            time.sleep(5)
+        except ClientError:
+            break
+    print(f"deleted feature group {group} in {time.time() - start:.0f} s")
+
+print("files still under feature-store/:", count("feature-store/"))
+for db, table in tables:
+    try:
+        glue.get_table(DatabaseName=db, Name=table)
+        print(f"glue table {db}.{table} still exists")
+    except ClientError:
+        print(f"glue table {db}.{table} is gone")
+
+# The feature group leaves its data behind. Remove it, plus the query results and CSVs.
+for prefix in ["feature-store/", "athena/", "fs-train/", "fs-validation/"]:
+    keys = [o["Key"] for page in s3.get_paginator("list_objects_v2").paginate(Bucket=BUCKET, Prefix=prefix)
+            for o in page.get("Contents", [])]
+    for i in range(0, len(keys), 1000):
+        s3.delete_objects(Bucket=BUCKET, Delete={"Objects": [{"Key": k} for k in keys[i:i + 1000]]})
+    print(f"removed {len(keys)} files under {prefix}")
+
+# A group deleted and created again left its old table behind, and no group points at it now.
+# So remove every table named after a group, plus the orders table training_set.py registered.
+try:
+    names = [t["Name"] for page in glue.get_paginator("get_tables").paginate(DatabaseName=DATABASE)
+             for t in page["TableList"]]
+except ClientError:
+    names = []
+prefixes = tuple(group.replace("-", "_") + "_" for group in GROUPS)
+for table in sorted(n for n in names if n.startswith(prefixes)) + ["orders"]:
+    try:
+        glue.delete_table(DatabaseName=DATABASE, Name=table)
+        print(f"removed glue table {DATABASE}.{table}")
+    except ClientError as e:
+        print(f"could not remove glue table {DATABASE}.{table}: {e.response['Error']['Code']}")
+</script>
+
+<script type="text/plain" id="o-clean">
+deleted feature group returns-customers in 5 s
+deleted feature group returns-failures in 5 s
+files still under feature-store/: 10874
+glue table sagemaker_featurestore.returns_customers_1792054063 still exists
+glue table sagemaker_featurestore.returns_failures_1792055722 still exists
+removed 10874 files under feature-store/
+removed 51 files under athena/
+removed 2 files under fs-train/
+removed 2 files under fs-validation/
+removed glue table sagemaker_featurestore.returns_customers_1792054063
+removed glue table sagemaker_featurestore.returns_failures_1792055722
+removed glue table sagemaker_featurestore.orders
+</script>
+
+<!-- ================= BEHAVIOUR ================= -->
+<script>
+(function(){
+'use strict';
+var $=function(s,r){return (r||document).querySelector(s)};
+var $$=function(s,r){return Array.prototype.slice.call((r||document).querySelectorAll(s))};
+var fmt=function(n){return Number(n).toLocaleString('en-US')};
+
+/* ---------- progress bar, nav, scroll spy ---------- */
+var bar=$('#bar'), toc=$('#toc'), menuBtn=$('#menuBtn');
+function onScroll(){
+  var h=document.documentElement; var max=h.scrollHeight-h.clientHeight;
+  bar.style.width=(max>0?Math.min(100,h.scrollTop/max*100):0)+'%';
+}
+window.addEventListener('scroll',onScroll,{passive:true}); onScroll();
+menuBtn.addEventListener('click',function(){var o=toc.classList.toggle('open');menuBtn.setAttribute('aria-expanded',o);});
+$$('#toc a').forEach(function(a){a.addEventListener('click',function(){toc.classList.remove('open');menuBtn.setAttribute('aria-expanded','false');});});
+var links={};$$('#toc a').forEach(function(a){links[a.getAttribute('href').slice(1)]=a;});
+if('IntersectionObserver' in window){
+  var io=new IntersectionObserver(function(es){es.forEach(function(e){
+    if(e.isIntersecting){$$('#toc a.on').forEach(function(x){x.classList.remove('on')});var l=links[e.target.id];if(l)l.classList.add('on');}
+  });},{rootMargin:'-20% 0px -70% 0px'});
+  ['top'].concat($$('section[id^=s]').map(function(s){return s.id})).forEach(function(id){var el=document.getElementById(id);if(el)io.observe(el);});
+}
+
+/* ---------- code rendering ---------- */
+function esc(t){return t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+var RE=/("""[\s\S]*?"""|'''[\s\S]*?'''|"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'|#[^\n]*|\b(?:import|from|def|return|if|else|elif|while|for|in|not|and|or|is|None|True|False|try|except|with|as|class|lambda|pass|break|continue|raise)\b|\b\d+(?:\.\d+)?\b)/g;
+function highlight(src){
+  return esc(src).replace(RE,function(m){
+    var c;
+    if(m[0]==='#')c='tc';else if(m[0]==='"'||m[0]==="'")c='ts';else if(/^\d/.test(m))c='tn';else c='tk';
+    return '<span class="'+c+'">'+m+'</span>';
+  });
+}
+$$('code[data-src]').forEach(function(c){
+  var raw=document.getElementById(c.getAttribute('data-src')).textContent.replace(/^\n/,'').replace(/\s+$/,'');
+  c.innerHTML=c.getAttribute('data-lang')==='py'?highlight(raw):esc(raw);
+  c._raw=raw;
+});
+$$('.cp').forEach(function(b){b.addEventListener('click',function(){
+  var code=b.parentNode.querySelector('code');var t=code._raw||code.textContent;
+  function done(){var o=b.textContent;b.textContent='Copied';setTimeout(function(){b.textContent=o},1400);}
+  if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(t).then(done,function(){fallback(t);done();});}else{fallback(t);done();}
+});});
+function fallback(t){var a=document.createElement('textarea');a.value=t;document.body.appendChild(a);a.select();try{document.execCommand('copy')}catch(e){}document.body.removeChild(a);}
+
+/* ---------- generic tabs ---------- */
+$$('[data-tabs]').forEach(function(g){
+  var tabs=$$('[role=tab]',g);
+  function sel(t){tabs.forEach(function(x){var on=x===t;x.setAttribute('aria-selected',on);x.tabIndex=on?0:-1;var p=document.getElementById(x.getAttribute('aria-controls'));if(p)p.hidden=!on;});}
+  tabs.forEach(function(t,i){
+    t.addEventListener('click',function(){sel(t)});
+    t.addEventListener('keydown',function(e){
+      if(e.key==='ArrowRight'||e.key==='ArrowLeft'){var n=tabs[(i+(e.key==='ArrowRight'?1:-1)+tabs.length)%tabs.length];n.focus();sel(n);}
+    });
+  });
+});
+
+/* ---------- segmented buttons helper ---------- */
+function seg(id,cb){
+  var g=$(id);var bs=$$('button',g);
+  bs.forEach(function(b){b.addEventListener('click',function(){bs.forEach(function(x){x.setAttribute('aria-pressed',x===b)});cb(b);});});
+}
+
+/* ---------- tooltip ---------- */
+var tip=$('#tip');
+function showTip(el){
+  var t=el.getAttribute('data-tip');if(!t)return;tip.innerHTML=t;tip.hidden=false;
+  var r=el.getBoundingClientRect();var tw=tip.offsetWidth,th=tip.offsetHeight;
+  var x=r.left+r.width/2-tw/2;x=Math.max(8,Math.min(window.innerWidth-tw-8,x));
+  var y=r.top-th-10;if(y<8)y=r.bottom+10;
+  tip.style.left=x+'px';tip.style.top=y+'px';
+}
+function hideTip(){tip.hidden=true;}
+document.addEventListener('mouseover',function(e){var el=e.target.closest&&e.target.closest('[data-tip]');if(el)showTip(el);});
+document.addEventListener('mouseout',function(e){var el=e.target.closest&&e.target.closest('[data-tip]');if(el)hideTip();});
+document.addEventListener('focusin',function(e){var el=e.target.closest&&e.target.closest('[data-tip]');if(el)showTip(el);});
+document.addEventListener('focusout',function(e){var el=e.target.closest&&e.target.closest('[data-tip]');if(el)hideTip();});
+window.addEventListener('scroll',hideTip,{passive:true});
+
+/* ---------- info-button groups ---------- */
+function infoGroup(root,infoEl,items,filter){
+  var bs=$$('button.st:not(.ghost)',root);
+  if(filter) bs=bs.filter(filter);
+  var all=$$('button.st:not(.ghost)',root.parentNode.querySelectorAll?root.parentNode:root);
+  function pick(i){
+    $$('button.st',root.parentNode).forEach(function(x){if(x.hasAttribute('data-i'))x.setAttribute('aria-pressed',x.getAttribute('data-i')==i);});
+    infoEl.innerHTML=items[i];
+  }
+  $$('button.st[data-i]',root.parentNode).forEach(function(b){b.addEventListener('click',function(){pick(b.getAttribute('data-i'))});});
+  pick(0);
+}
+infoGroup($('#pipe'),$('#pipeinfo'),[
+  '<b class="t">returns_events.csv</b> · 12,000 orders from 1,440 customers, October 2025 to September 2026, sitting in S3 under <code>raw/events/</code>. About a third (0.331) were returned. Each order only says which customer placed it; the history is not in the file.',
+  '<b class="t">features.py</b> · Turns the orders into customer feature rows, one row each time a customer\'s history changes, each with the time it became true.',
+  '<b class="t">Feature group</b> · <code>ingest.py</code> writes the rows with <code>put_record</code>. Feature Store keeps them in the offline store, as files in S3, with a table in Glue.',
+  '<b class="t">training_set.py</b> · Uses <strong>Athena</strong>, an AWS service that runs SQL on files in S3, to join each order to the right customer row. It writes the training files, naive and point-in-time.',
+  '<b class="t">train.py</b> · The previous lesson\'s training file with new paths. A SageMaker training job fits XGBoost on the files from step 4.'
+]);
+infoGroup($('#ana'),$('#anainfo'),[
+  '<b class="t">customer_id · record identifier</b> · Says who a record is about. Declared <code>String</code>, though IDs often look like numbers: a numeric type would silently merge <code>007</code> and <code>7</code> (section 9).',
+  '<b class="t">event_time · event time</b> · Says when a record became true. Written as text such as <code>2025-10-13T00:00:00Z</code>. Feature Store checks its format strictly.',
+  '<b class="t">orders_so_far · Integral</b> · The customer\'s order count at that moment, including an order placed at that moment.',
+  '<b class="t">returns_so_far · Integral</b> · Returns known by that moment. A return is only known 14 days after its order.',
+  '<b class="t">return_rate · Fractional</b> · <code>(returns + 1) / (orders + 5)</code>, smoothed toward 20%. Exactly 0.2 with no history.',
+  '<b class="t">tenure_days · Integral</b> · Days since the customer signed up, at that moment.',
+  '<b class="t">OfflineStoreConfig</b> · Where the offline store writes: a prefix in your bucket, <code>s3://BUCKET/feature-store</code>, with no <code>/</code> at the end. Feature Store resolves the full path and gives every group a folder of its own.',
+  '<b class="t">RoleArn</b> · The role Feature Store uses to write to your bucket. The file passes the space\'s own role, <code>returns-ml-sagemaker-role</code>, which needs <code>s3:GetBucketAcl</code> on the bucket.'
+]);
+
+/* ---------- platform status grid ---------- */
+var CHK=['VPC returns-ml-vpc','Internet gateway','NAT gateway','Internet routes (2 subnets)','Endpoint s3','Endpoint sagemaker.api','Endpoint sagemaker.runtime','Endpoint sts','Endpoint logs','Endpoint ssm','Endpoint ssmmessages','Security group returns-studio-sg','Security group returns-endpoints-sg','Role returns-ml-sagemaker-role','Policy: remote access (StartSession)','Policy: bucket access (GetBucketAcl)','Policy: feature store (DeleteTable)','Bucket','File raw/events/returns_events.csv','Domain returns-ml-domain','User profile instructor','Space returns-lab','Space owner tag (remote access)'];
+function chk(s){
+  $('#chkgrid').innerHTML=CHK.map(function(n){return '<div><span>'+n+'</span><span class="badge '+(s?'ok':'miss')+'">'+(s?'✓ OK':'MISSING')+'</span></div>';}).join('');
+}
+chk(0);seg('#chkseg',function(b){chk(+b.getAttribute('data-s'))});
+
+/* ---------- features stepper ---------- */
+var F=[
+ ['2025-10-13T00:00:00Z',1,0,0.1667,790,'order','Order placed. <code>orders_so_far</code> becomes 1.'],
+ ['2025-10-17T00:00:00Z',2,0,0.1429,794,'order','A second order is placed.'],
+ ['2025-10-27T00:00:00Z',2,1,0.2857,804,'return','No order today. The first order (13 Oct) came back, and the shop learns it 14 days later, so <code>returns_so_far</code> becomes 1.'],
+ ['2025-12-07T00:00:00Z',3,1,0.2500,845,'order','A third order is placed.'],
+ ['2025-12-21T00:00:00Z',3,2,0.3750,859,'return','The 7 December order\'s return becomes known, 14 days after it was placed.'],
+ ['2025-12-22T00:00:00Z',4,2,0.3333,860,'order','A fourth order, the day after that return became known.'],
+ ['2026-01-05T00:00:00Z',4,3,0.4444,874,'return','The 22 December order\'s return becomes known: 3 returns.'],
+ ['2026-03-01T00:00:00Z',5,3,0.4000,929,'order','A fifth order is placed.']
+];
+var stI=0,stR=$('#stRange');
+function stRender(){
+  var r=F[stI];$('#stN').textContent=stI+1;stR.value=stI+1;
+  $('#stDots').innerHTML=F.map(function(f,i){return '<i class="'+(i<stI?'past ':'')+(i===stI?'cur ':'')+(f[5]==='return'?'ret':'')+'">'+(i+1)+'</i>';}).join('');
+  $('#stRead').innerHTML='<div><small>event_time</small><b style="font-size:15px;font-family:var(--mono)">'+r[0].slice(0,10)+'</b></div>'+
+   '<div><small>orders_so_far</small><b>'+r[1]+'</b></div><div><small>returns_so_far</small><b>'+r[2]+'</b></div>'+
+   '<div><small>return_rate</small><b>'+r[3].toFixed(4)+'</b></div><div><small>tenure_days</small><b>'+r[4]+'</b></div>'+
+   '<div class="eq">return_rate = (returns + 1) / (orders + 5) = ('+r[2]+' + 1) / ('+r[1]+' + 5) = '+r[3].toFixed(4)+'</div>';
+  $('#stWhy').innerHTML='<b class="t">'+(r[5]==='order'?'● Order placed':'■ Return becomes known')+'</b> · '+r[6];
+  $('#stPrev').disabled=stI===0;$('#stNext').disabled=stI===F.length-1;
+}
+$('#stPrev').addEventListener('click',function(){if(stI>0){stI--;stRender();}});
+$('#stNext').addEventListener('click',function(){if(stI<F.length-1){stI++;stRender();}});
+stR.addEventListener('input',function(){stI=+stR.value-1;stRender();});
+stRender();
+
+/* ---------- waterfall ---------- */
+(function(){
+  var T=15977;
+  var rows=[
+    ['One row for every order',12000,0,'','+'],
+    ['Plus one row for every return',3977,12000,'g','+'],
+    ['Minus orders on a day the customer had already ordered',200,T-200,'cut','−'],
+    ['Minus returns on a day that already had a row',179,T-200-179,'cut','−'],
+    ['Feature rows',15598,0,'tot','=']
+  ];
+  $('#wf').innerHTML=rows.map(function(r){
+    return '<div class="r" role="listitem"><span>'+r[0]+'</span><div class="tr"><div class="bar '+r[3]+'" style="left:'+(r[2]/T*100)+'%;width:'+(r[1]/T*100)+'%"></div></div><span class="v">'+r[4]+' '+fmt(r[1])+'</span></div>';
+  }).join('');
+})();
+
+/* ---------- latency chart ---------- */
+(function(){
+  var W=900,Hh=330,x0=210,x1=860,tmax=350;
+  function X(t){return x0+(x1-x0)*t/tmax;}
+  var polls=[0,30,60,90,120,150,180,210,240,271,301];
+  var s='<svg viewBox="0 0 '+W+' '+Hh+'" role="img" aria-label="Timeline in seconds. put_record calls run from 0 to 22 seconds. The offline store shows 0 files at every check up to 301 seconds, then 10,863 files and 15,598 rows visible to Athena at 338 seconds.">';
+  // grid + axis
+  for(var t=0;t<=350;t+=50){s+='<line class="grid" x1="'+X(t)+'" x2="'+X(t)+'" y1="40" y2="262"/><text class="svgd" x="'+X(t)+'" y="284" font-size="12" text-anchor="middle">'+t+'</text>';}
+  s+='<text class="svgm" x="'+((x0+x1)/2)+'" y="308" font-size="12.5" text-anchor="middle">seconds since the scripts started</text>';
+  // gap shading
+  s+='<rect x="'+X(22)+'" y="40" width="'+(X(338)-X(22))+'" height="222" fill="rgba(212,175,55,.07)"/>';
+  s+='<text class="svgg" x="'+((X(22)+X(338))/2)+'" y="62" font-size="13.5" font-weight="700" text-anchor="middle">Every write has succeeded. Nothing is visible.</text>';
+  s+='<path d="M'+X(22)+' 72H'+X(338)+'" stroke="#d4af37" stroke-width="1.5" stroke-dasharray="5 4"/><path d="M'+X(22)+' 66V78M'+X(338)+' 66V78" stroke="#d4af37" stroke-width="1.5"/>';
+  s+='<text class="svgm" x="'+((X(22)+X(338))/2)+'" y="92" font-size="12" text-anchor="middle">5 min 16 s after the last write</text>';
+  // lanes
+  var L=[['ingest.py','put_record calls',140],['Files in the','offline store',200],['Rows Athena','can see',250]];
+  L.forEach(function(l){s+='<text class="svgt" x="16" y="'+(l[2]-2)+'" font-size="13.5" font-weight="600">'+l[0]+'</text><text class="svgm" x="16" y="'+(l[2]+15)+'" font-size="12.5">'+l[1]+'</text><line class="ax" x1="'+x0+'" x2="'+x1+'" y1="'+(l[2]+4)+'" y2="'+(l[2]+4)+'"/>';});
+  // write bar
+  s+='<rect class="pt" tabindex="0" x="'+X(0)+'" y="124" width="'+(X(22)-X(0))+'" height="24" rx="4" fill="#d4af37" data-tip="<b>ingest.py</b><br>15,598 put_record calls, 8 threads<br>08:48:35 → 08:48:57 (22 s)" aria-label="ingest.py wrote 15,598 records in 22 seconds"/>';
+  // polls
+  polls.forEach(function(p){s+='<circle class="pt" tabindex="0" cx="'+X(p)+'" cy="204" r="5" fill="#0a0a0b" stroke="#a6a6ac" stroke-width="2" data-tip="<b>Check at '+p+' s</b><br>files: 0" aria-label="Check at '+p+' seconds: 0 files"/>';});
+  s+='<path d="M'+X(0)+' 252H'+X(338)+'" stroke="#3d3d43" stroke-dasharray="3 5"/>';
+  s+='<text class="svgd" x="'+((X(0)+X(301))/2)+'" y="272" font-size="11.5" text-anchor="middle" opacity="0">.</text>';
+  s+='<text class="svgd" x="'+(X(160))+'" y="244" font-size="12" text-anchor="middle">not queried yet: no files to read</text>';
+  // first seen
+  s+='<circle class="pt" tabindex="0" cx="'+X(338)+'" cy="204" r="8" fill="#d4af37" data-tip="<b>338 s · 08:54:13</b><br>files: 10,863" aria-label="At 338 seconds: 10,863 files"/>';
+  s+='<rect class="pt" tabindex="0" x="'+(X(338)-8)+'" y="240" width="16" height="16" fill="#f0d77a" transform="rotate(45 '+X(338)+' 248)" data-tip="<b>338 s · 08:54:13</b><br>rows in Athena: 15,598<br>All rows appear at once" aria-label="At 338 seconds: 15,598 rows visible to Athena"/>';
+  s+='<text class="svgg" x="'+(X(338)-14)+'" y="196" font-size="12.5" font-weight="700" text-anchor="end">10,863 files</text>';
+  s+='<text class="svgg" x="'+(X(338)-18)+'" y="232" font-size="12.5" font-weight="700" text-anchor="end">15,598 rows</text>';
+  s+='<text class="svgm" x="'+X(22)+'" y="118" font-size="12" text-anchor="start">22 s</text>';
+  s+='</svg>';
+  $('#lat').innerHTML=s;
+})();
+
+/* ---------- S3 partition chain ---------- */
+(function(){
+  var seg=[
+    ['s3://BUCKET','Your bucket.'],
+    ['feature-store','The prefix chosen in <code>create_feature_group.py</code> as the offline store location.'],
+    ['111122223333/sagemaker/us-east-1/offline-store','Added by Feature Store: the account ID, the service, the region and the words <code>offline-store</code>.'],
+    ['returns-customers-1792054063','The feature group\'s name plus a number, the same number as its Glue table. Every group gets a folder of its own.'],
+    ['data','The folder that holds the records.'],
+    ['year=2025','A partition, named after the <strong>event time</strong> of the records inside, not the time they were written.'],
+    ['month=10','Partition by month of event time.'],
+    ['day=13','Partition by day of event time.'],
+    ['hour=00','Partition by hour of event time. A row stamped <code>2025-10-13T00:00:00Z</code> lands here even though it was written long after.'],
+    ['29 files · ~2 KB each','This one folder holds 29 small files. Feature Store writes in small batches and never merges them.']
+  ];
+  var c=$('#chain');
+  c.innerHTML=seg.map(function(s,i){return (i?'<span class="s" aria-hidden="true">/</span>':'')+'<button data-i="'+i+'" aria-pressed="'+(i===5)+'">'+s[0]+'</button>';}).join('');
+  function pick(i){$$('button',c).forEach(function(b){b.setAttribute('aria-pressed',b.getAttribute('data-i')==i)});$('#chaininfo').innerHTML='<b class="t">'+seg[i][0]+'</b> · '+seg[i][1];}
+  $$('button',c).forEach(function(b){b.addEventListener('click',function(){pick(b.getAttribute('data-i'))});});
+  pick(5);
+})();
+
+/* ---------- C-00001 data ---------- */
+var H=[
+['2025-10-13',1,0,0.1667,790],['2025-10-17',2,0,0.1429,794],['2025-10-27',2,1,0.2857,804],['2025-12-07',3,1,0.2500,845],
+['2025-12-21',3,2,0.3750,859],['2025-12-22',4,2,0.3333,860],['2026-01-05',4,3,0.4444,874],['2026-03-01',5,3,0.4000,929],
+['2026-03-15',5,4,0.5000,943],['2026-04-04',6,4,0.4545,963],['2026-04-06',7,4,0.4167,965],['2026-04-11',8,4,0.3846,970],
+['2026-04-18',8,5,0.4615,977],['2026-04-20',8,6,0.5385,979],['2026-04-24',9,6,0.5000,983],['2026-04-25',9,7,0.5714,984],
+['2026-05-08',9,8,0.6429,997],['2026-06-04',10,8,0.6000,1024],['2026-06-18',10,9,0.6667,1038],['2026-06-27',11,9,0.6250,1047],
+['2026-08-10',12,9,0.5882,1091],['2026-08-24',12,10,0.6471,1105],['2026-08-31',13,10,0.6111,1112],['2026-09-02',14,10,0.5789,1114],
+['2026-09-14',14,11,0.6316,1126]
+];
+function dt(s){var p=s.split('-');return Date.UTC(+p[0],+p[1]-1,+p[2]);}
+var D0=dt('2025-10-01'),D1=dt('2026-09-30'),DAY=864e5;
+var MON=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+function monthTicks(){var o=[];for(var i=0;i<12;i+=2){var y=2025+Math.floor((9+i)/12),m=(9+i)%12;o.push([Date.UTC(y,m,1),MON[m]+" '"+String(y).slice(2)]);}return o;}
+
+/* ---------- history chart ---------- */
+var hmode='count';
+function drawHist(){
+  var W=900,Hh=340,l=56,r=24,t=22,b=50;
+  function X(d){return l+(W-l-r)*(d-D0)/(D1-D0);}
+  var ymax=hmode==='count'?15:0.8,yt=hmode==='count'?[0,3,6,9,12,15]:[0,0.2,0.4,0.6,0.8];
+  function Y(v){return Hh-b-(Hh-t-b)*v/ymax;}
+  var s='<svg viewBox="0 0 '+W+' '+Hh+'" role="img" aria-label="Step chart of the 25 stored rows for customer C-00001 from October 2025 to September 2026. Orders so far rise to 14 and returns so far to 11; return rate ends at 0.6316.">';
+  yt.forEach(function(v){s+='<line class="grid" x1="'+l+'" x2="'+(W-r)+'" y1="'+Y(v)+'" y2="'+Y(v)+'"/><text class="svgd" x="'+(l-10)+'" y="'+(Y(v)+4)+'" font-size="12" text-anchor="end">'+(hmode==='count'?v:v.toFixed(1))+'</text>';});
+  monthTicks().forEach(function(m){s+='<line class="grid" x1="'+X(m[0])+'" x2="'+X(m[0])+'" y1="'+t+'" y2="'+(Hh-b)+'" opacity=".5"/><text class="svgd" x="'+X(m[0])+'" y="'+(Hh-b+22)+'" font-size="12" text-anchor="middle">'+m[1]+'</text>';});
+  s+='<line class="ax" x1="'+l+'" x2="'+(W-r)+'" y1="'+(Hh-b)+'" y2="'+(Hh-b)+'"/>';
+  function path(idx){var p='';H.forEach(function(row,i){var x=X(dt(row[0])),y=Y(row[idx]);p+=(i?'H'+x+'V'+y:'M'+x+' '+y);});p+='H'+X(D1);return p;}
+  var series=hmode==='count'?[[2,'#cfcfd4','5 4','sq'],[1,'#d4af37','','ci']]:[[3,'#d4af37','','ci']];
+  series.forEach(function(se){s+='<path d="'+path(se[0])+'" fill="none" stroke="'+se[1]+'" stroke-width="2.2" '+(se[2]?'stroke-dasharray="'+se[2]+'"':'')+'/>';});
+  series.forEach(function(se){H.forEach(function(row,i){
+    var x=X(dt(row[0])),y=Y(row[se[0]]);
+    var tipTxt='<b>'+row[0]+'</b><br>orders '+row[1]+' · returns '+row[2]+'<br>rate '+row[3].toFixed(4);
+    var lab='Row '+(i+1)+', '+row[0]+': '+row[1]+' orders, '+row[2]+' returns, return rate '+row[3].toFixed(4);
+    if(se[3]==='sq')s+='<rect class="pt" tabindex="0" data-i="'+i+'" x="'+(x-4.5)+'" y="'+(y-4.5)+'" width="9" height="9" fill="#cfcfd4" data-tip="'+tipTxt+'" aria-label="'+lab+'"/>';
+    else s+='<circle class="pt" tabindex="0" data-i="'+i+'" cx="'+x+'" cy="'+y+'" r="5" fill="#d4af37" data-tip="'+tipTxt+'" aria-label="'+lab+'"/>';
+  });});
+  s+='</svg>';
+  $('#hist').innerHTML=s;
+  $('#histleg').innerHTML=hmode==='count'
+   ?'<span><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="5" fill="#d4af37"/></svg>orders_so_far</span><span><svg viewBox="0 0 16 16"><rect x="3" y="3" width="10" height="10" fill="#cfcfd4"/></svg>returns_so_far (dashed)</span>'
+   :'<span><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="5" fill="#d4af37"/></svg>return_rate</span>';
+  function show(i){var r=H[i];$('#histinfo').innerHTML='<b class="t">Row '+(i+1)+' of 25 · '+r[0]+'T00:00:00Z</b> · orders_so_far <b>'+r[1]+'</b>, returns_so_far <b>'+r[2]+'</b>, return_rate <b>'+r[3].toFixed(4)+'</b>, tenure_days <b>'+r[4]+'</b>';}
+  $$('#hist .pt').forEach(function(p){var i=+p.getAttribute('data-i');p.addEventListener('click',function(){show(i)});p.addEventListener('focus',function(){show(i)});p.addEventListener('keydown',function(e){if(e.key==='Enter'||e.key===' '){e.preventDefault();show(i);}});});
+}
+drawHist();seg('#histseg',function(b){hmode=b.getAttribute('data-m');drawHist();});
+
+/* ---------- point-in-time explorer ---------- */
+var ORD=[];(function(){var prev=0;H.forEach(function(r){if(r[1]>prev){ORD.push(r[0]);prev=r[1];}});})();
+var sel=$('#pitOrder');
+ORD.forEach(function(d,i){var o=document.createElement('option');o.value=i;o.textContent='Order '+(i+1)+' · '+d;sel.appendChild(o);});
+sel.value=3;
+var pmode='lt';
+function drawPit(){
+  var oi=+sel.value,od=dt(ORD[oi]);
+  var idx=-1;H.forEach(function(r,i){var t=dt(r[0]);if(pmode==='lt'?t<od:t<=od)idx=i;});
+  var W=900,Hh=210,l=30,r=30;
+  function X(d){return l+(W-l-r)*(d-D0)/(D1-D0);}
+  var last=H.length-1;
+  var s='<svg viewBox="0 0 '+W+' '+Hh+'" role="img" aria-label="Timeline of the 25 feature rows of C-00001 and its 14 orders. The selected order is order '+(oi+1)+' on '+ORD[oi]+'.">';
+  monthTicks().forEach(function(m){s+='<line class="grid" x1="'+X(m[0])+'" x2="'+X(m[0])+'" y1="40" y2="165" opacity=".5"/><text class="svgd" x="'+X(m[0])+'" y="195" font-size="12" text-anchor="middle">'+m[1]+'</text>';});
+  s+='<line class="ax" x1="'+l+'" x2="'+(W-r)+'" y1="95" y2="95"/><line class="ax" x1="'+l+'" x2="'+(W-r)+'" y1="145" y2="145"/>';
+  s+='<text class="svgd" x="'+l+'" y="82" font-size="11.5">feature rows</text><text class="svgd" x="'+l+'" y="132" font-size="11.5">orders</text>';
+  // orders lane
+  ORD.forEach(function(d,i){var x=X(dt(d)),on=i===oi;s+='<path d="M'+x+' '+(145-(on?9:6))+'l'+(on?9:6)+' '+(on?9:6)+'l-'+(on?9:6)+' '+(on?9:6)+'l-'+(on?9:6)+' -'+(on?9:6)+'z" fill="'+(on?'#f0d77a':'#7b7b82')+'"/>';});
+  // order marker
+  var ox=X(od);
+  s+='<line x1="'+ox+'" x2="'+ox+'" y1="34" y2="168" stroke="#f0d77a" stroke-width="1.5" stroke-dasharray="4 4"/>';
+  var anchor=ox>W-170?'end':(ox<170?'start':'middle');
+  s+='<text class="svgg" x="'+ox+'" y="24" font-size="13" font-weight="700" text-anchor="'+anchor+'">Order '+(oi+1)+' · '+ORD[oi]+'</text>';
+  // rows
+  H.forEach(function(row,i){
+    var x=X(dt(row[0])),t=dt(row[0]);var fut=pmode==='lt'?t>=od:t>od;
+    if(i===idx)return;
+    var tipT='<b>Row '+(i+1)+' · '+row[0]+'</b><br>orders '+row[1]+' · returns '+row[2]+(fut?'<br>after the order: unknown at the time':'<br>before the order');
+    if(fut)s+='<circle cx="'+x+'" cy="95" r="4" fill="none" stroke="#7b7b82" stroke-dasharray="2 2" stroke-width="1.5" class="pt" tabindex="0" data-tip="'+tipT+'" aria-label="Row '+(i+1)+', '+row[0]+', after the order"/>';
+    else s+='<circle cx="'+x+'" cy="95" r="4" fill="#3d3d43" stroke="#a6a6ac" stroke-width="1.5" class="pt" tabindex="0" data-tip="'+tipT+'" aria-label="Row '+(i+1)+', '+row[0]+', before the order"/>';
+  });
+  // naive ring on last
+  var lx=X(dt(H[last][0]));
+  s+='<circle cx="'+lx+'" cy="95" r="10" fill="none" stroke="#ece9e2" stroke-width="2"/><text class="svgt" x="'+lx+'" y="68" font-size="12" font-weight="600" text-anchor="end">Naive: latest row</text><path d="M'+(lx-6)+' 72L'+(lx-1)+' 85" stroke="#ece9e2" stroke-width="1.2" fill="none"/>';
+  // chosen
+  if(idx>=0){var cx=X(dt(H[idx][0]));s+='<circle cx="'+cx+'" cy="95" r="9" fill="#d4af37" stroke="#000" stroke-width="1.5" class="pt" tabindex="0" data-tip="<b>Honest row '+(idx+1)+' · '+H[idx][0]+'</b><br>orders '+H[idx][1]+' · returns '+H[idx][2]+'" aria-label="Chosen honest row '+(idx+1)+', '+H[idx][0]+'"/>';
+    var ca=cx>W-120?'end':(cx<120?'start':'middle');
+    s+='<text class="svgg" x="'+cx+'" y="122" font-size="12" font-weight="700" text-anchor="'+ca+'" opacity="0">.</text>';}
+  s+='</svg>';
+  $('#pit').innerHTML=s;
+  $('#pitleg').innerHTML=
+   '<span><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="#d4af37"/></svg>Row the join chooses</span>'+
+   '<span><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="5" fill="#3d3d43" stroke="#a6a6ac" stroke-width="1.5"/></svg>Older rows</span>'+
+   '<span><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="5" fill="none" stroke="#7b7b82" stroke-dasharray="2 2" stroke-width="1.5"/></svg>Rows from after the order (the future)</span>'+
+   '<span><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="none" stroke="#ece9e2" stroke-width="2"/></svg>Naive join: latest row</span>'+
+   '<span><svg viewBox="0 0 16 16"><path d="M8 2l6 6-6 6-6-6z" fill="#f0d77a"/></svg>Selected order</span>';
+  // table
+  var hv,hnote;
+  if(idx>=0){hv=[H[idx][1],H[idx][2],H[idx][3].toFixed(4),H[idx][4]];hnote='row stamped '+H[idx][0];}
+  else{var ten=H[0][4]+Math.round((od-dt(H[0][0]))/DAY);hv=[0,0,'0.2000',ten];hnote='no row exists: filled with 0, 0, 0.2; tenure from the sign-up date';}
+  var nv=[H[last][1],H[last][2],H[last][3].toFixed(4),H[last][4]];
+  var names=['orders_so_far','returns_so_far','return_rate','tenure_days'];
+  var t='<thead><tr><th>Feature</th><th class="num">Join chosen<br><span style="text-transform:none;letter-spacing:0;font-weight:400;color:var(--mut)">'+(pmode==='lt'?'strictly before':'on or before')+'</span></th><th class="num">Naive<br><span style="text-transform:none;letter-spacing:0;font-weight:400;color:var(--mut)">latest row ('+H[last][0]+')</span></th></tr></thead><tbody>';
+  names.forEach(function(n,i){t+='<tr><td><code>'+n+'</code></td><td class="num">'+hv[i]+'</td><td class="num">'+nv[i]+'</td></tr>';});
+  $('#pitTbl').innerHTML=t+'</tbody>';
+  var msg;
+  if(pmode==='lt'){
+    msg=idx>=0?'<b class="t">Honest.</b> The join uses the row stamped '+H[idx][0]+', the last one true before this order: '+H[idx][1]+' orders and '+H[idx][2]+' returns, all that the shop knew that day.'
+      :'<b class="t">Honest, with no history.</b> There is no row before this order, because it is the customer\'s first. The join returns nothing, and the missing values are filled: 0 orders, 0 returns, return rate 0.2.';
+    msg+=' The naive join would instead hand this order <b>'+nv[0]+' orders and '+nv[1]+' returns</b>, history from the future, including this order\'s own outcome.';
+  }else{
+    var same=idx>=0&&H[idx][0]===ORD[oi];
+    msg=same?'<b class="t">Leak.</b> With <code>&lt;=</code>, the join picks the row stamped on the order\'s own day, <b>'+H[idx][0]+'</b>. That row already counts this order: <code>orders_so_far</code> is '+H[idx][1]+', not '+(H[idx][1]-1)+'. At checkout the order had not been counted yet. Every one of the 12,000 orders is affected this way, and none is left without a row, so the result looks tidier, not worse.'
+      :'<b class="t">Leak.</b> The row picked here is stamped '+(idx>=0?H[idx][0]:'—')+'.';
+  }
+  $('#pitInfo').innerHTML=msg;
+}
+sel.addEventListener('change',drawPit);
+seg('#pitMode',function(b){pmode=b.getAttribute('data-m');drawPit();});
+drawPit();
+
+/* ---------- AUC chart ---------- */
+(function(){
+  var W=900,Hh=380,l=60,r=24,t=24,b=70;
+  function Y(v){return Hh-b-(Hh-t-b)*v;}
+  var groups=[['Naive model',[0.889,0.832,0.714]],['Point-in-time model',[0.821,0.721,0.721]]];
+  var names=['train:auc','validation:auc on its own validation set','AUC on honest point-in-time rows'];
+  var s='<svg viewBox="0 0 '+W+' '+Hh+'" role="img" aria-label="Grouped bar chart of AUC. Naive model: training 0.889, own validation 0.832, honest rows 0.714. Point-in-time model: training 0.821, own validation 0.721, honest rows 0.721.">'+
+    '<defs><pattern id="hatch" width="8" height="8" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="8" height="8" fill="#2c2c30"/><rect width="4" height="8" fill="#55555b"/></pattern></defs>';
+  [0,0.2,0.4,0.6,0.8,1.0].forEach(function(v){s+='<line class="grid" x1="'+l+'" x2="'+(W-r)+'" y1="'+Y(v)+'" y2="'+Y(v)+'"/><text class="svgd" x="'+(l-10)+'" y="'+(Y(v)+4)+'" font-size="12" text-anchor="end">'+v.toFixed(1)+'</text>';});
+  var fills=['url(#hatch)','#8b8b92','#d4af37'];
+  var gw=(W-l-r)/2,bw=78,gap=14;
+  var pos={};
+  groups.forEach(function(g,gi){
+    var cx=l+gw*gi+gw/2;
+    g[1].forEach(function(v,bi){
+      var x=cx+(bi-1)*(bw+gap)-bw/2;pos[gi+'-'+bi]=x;
+      s+='<rect class="pt" tabindex="0" x="'+x+'" y="'+Y(v)+'" width="'+bw+'" height="'+(Y(0)-Y(v))+'" rx="4" fill="'+fills[bi]+'" '+(bi===0?'stroke="#7b7b82"':'')+' data-tip="<b>'+g[0]+'</b><br>'+names[bi]+'<br>AUC '+v.toFixed(3)+'" aria-label="'+g[0]+', '+names[bi]+': '+v.toFixed(3)+'"/>';
+      s+='<text class="'+(bi===2?'svgg':'svgt')+'" x="'+(x+bw/2)+'" y="'+(Y(v)-8)+'" font-size="'+(bi===2?15:13.5)+'" font-weight="'+(bi===2?700:500)+'" text-anchor="middle">'+v.toFixed(3)+'</text>';
+    });
+    s+='<text class="svgt" x="'+cx+'" y="'+(Hh-b+30)+'" font-size="14.5" font-weight="600" text-anchor="middle">'+g[0]+'</text>';
+  });
+  // gap annotation on naive group
+  var xr=pos['0-2']+bw+10;
+  s+='<line x1="'+(pos['0-1']+bw)+'" x2="'+(xr+18)+'" y1="'+Y(0.832)+'" y2="'+Y(0.832)+'" stroke="#f0d77a" stroke-dasharray="4 4"/>';
+  s+='<line x1="'+(xr+12)+'" x2="'+(xr+12)+'" y1="'+(Y(0.832)+2)+'" y2="'+(Y(0.714)-2)+'" stroke="#f0d77a" stroke-width="2"/>';
+  s+='<text class="svgg" x="'+(xr+22)+'" y="'+((Y(0.832)+Y(0.714))/2+4)+'" font-size="13" font-weight="700">−0.118</text>';
+  s+='</svg>';
+  $('#auc').innerHTML=s;
+  $('#aucleg').innerHTML='<span><svg viewBox="0 0 16 16"><rect x="1" y="1" width="14" height="14" fill="url(#hatch)" stroke="#7b7b82"/></svg>train:auc</span><span><svg viewBox="0 0 16 16"><rect x="1" y="1" width="14" height="14" fill="#8b8b92"/></svg>validation:auc on the model\'s own validation set</span><span><svg viewBox="0 0 16 16"><rect x="1" y="1" width="14" height="14" fill="#d4af37"/></svg>AUC on honest point-in-time rows</span>';
+})();
+
+/* ---------- write tester ---------- */
+var WT={
+ types:[
+  ['orders_so_far = "3.0"','Integral',0,'<b class="t">Rejected</b> · Validation Error: attempted to parse the value for <code>orders_so_far</code> into a FeatureValue of type Integral. The value must be within the range of a 64 bit signed integer. A pandas column silently turned into decimals would hit exactly this.'],
+  ['orders_so_far = "abc"','Integral',0,'<b class="t">Rejected</b> · The same validation error: the value cannot be parsed as an Integral.'],
+  ['orders_so_far = "007"','Integral',1,'<b class="t">Accepted, and silently changed</b> · The store read it as the number 7. For a count that is harmless. For an ID declared Integral, <code>007</code> and <code>7</code> would become the same customer with no error.'],
+  ['orders_so_far = "nan"','Integral',0,'<b class="t">Rejected</b> · The same validation error: <code>nan</code> is not an integer.'],
+  ['return_rate = "nan" (str of a NaN)','Fractional',0,'<b class="t">Rejected</b> · Validation Error for a Fractional feature: the value must be a double precision floating point number as defined by IEEE 754, in decimal form or scientific notation.']
+ ],
+ time:[
+  ['2026-07-01T10:00:00Z','event_time',1,'<b class="t">Accepted</b> · The format the store expects: <code>yyyy-MM-dd\'T\'HH:mm:ssZ</code>.'],
+  ['2026-07-01 10:00:00','event_time',0,'<b class="t">Rejected</b> · Unable to parse the EventTime. String values must be ISO-8601 in <code>yyyy-MM-dd\'T\'HH:mm:ssZ</code> or <code>yyyy-MM-dd\'T\'HH:mm:ss.SSSZ</code>. The space instead of the <code>T</code> is exactly what <code>str()</code> gives for a pandas timestamp.'],
+  ['1751364000000','event_time',0,'<b class="t">Rejected</b> · An epoch number in milliseconds is not an ISO-8601 string.'],
+  ['1751364000','event_time',0,'<b class="t">Rejected</b> · An epoch number in seconds is not an ISO-8601 string either.'],
+  ['2026-07-01T10:00:00+05:30','event_time',1,'<b class="t">Accepted, though not in the listed formats</b> · Stored as text exactly as sent. Athena\'s <code>from_iso8601_timestamp</code> still reads it, but as text, times with different offsets no longer sort in time order. Pick one format and write it everywhere.'],
+  ['2026-07-01T10:00:00.123Z','event_time',1,'<b class="t">Accepted</b> · The milliseconds format is in the list of accepted formats.']
+ ]
+};
+var wtk='types';
+function drawWT(){
+  var t='<thead><tr><th>Value written</th><th>Feature</th><th>Result</th></tr></thead><tbody>';
+  WT[wtk].forEach(function(r,i){t+='<tr class="wtr" tabindex="0" data-i="'+i+'" style="cursor:pointer"><td class="mono">'+r[0]+'</td><td><span class="badge type">'+r[1]+'</span></td><td><span class="res '+(r[2]?'a':'r')+'">'+(r[2]?'✓ Accepted':'✕ Rejected')+'</span></td></tr>';});
+  $('#wtTbl').innerHTML=t+'</tbody>';
+  function show(i){$$('#wtTbl .wtr').forEach(function(x){x.style.background=x.getAttribute('data-i')==i?'var(--goldbg)':''});$('#wtInfo').innerHTML=WT[wtk][i][3];}
+  $$('#wtTbl .wtr').forEach(function(x){var i=+x.getAttribute('data-i');x.addEventListener('click',function(){show(i)});x.addEventListener('focus',function(){show(i)});x.addEventListener('keydown',function(e){if(e.key==='Enter'||e.key===' '){e.preventDefault();show(i);}});});
+  show(wtk==='types'?2:1);
+}
+drawWT();seg('#wtseg',function(b){wtk=b.getAttribute('data-t');drawWT();});
+
+/* ---------- teardown inventory ---------- */
+var INV=[
+ ['Feature groups (2)','2 exist','Deleted','—'],
+ ['Offline store files in S3 (feature-store/)','10,874 files','10,874 files left behind','Removed'],
+ ['Glue tables of the two groups','2 tables','2 tables left behind','Removed'],
+ ['Athena query results (athena/)','51 files','51 files','Removed'],
+ ['Training CSVs (fs-train/, fs-validation/)','4 files','4 files','Removed'],
+ ['Glue table orders','1 table','1 table','Removed']
+];
+var INFO=[
+ 'Everything the work created is still in place.',
+ '<b class="t">Deleting a feature group removes its definition and nothing it wrote.</b> Each group went in 5 seconds, yet all 10,874 files and both tables were still there.',
+ '<b class="t">Clean.</b> The files and tables are removed; the tables are found by listing, so even a table left by an earlier delete-and-recreate goes too.'
+];
+function drawInv(s){
+  var t='<thead><tr><th>Item</th><th>State</th></tr></thead><tbody>';
+  INV.forEach(function(r){var v=r[s+1];var left=s===1&&r[0].indexOf('Feature groups')<0;var gone=(s===2)||(s===1&&r[0].indexOf('Feature groups')===0);
+    t+='<tr><td>'+r[0]+'</td><td><span class="res '+(gone?'r':'a')+'">'+(gone?'✕ Gone':(left?'● Left behind':'● Present'))+'</span> <span style="color:var(--mut);font-size:13.5px;margin-left:8px">'+(s===2?'removed':v)+'</span></td></tr>';});
+  $('#invTbl').innerHTML=t+'</tbody>';$('#invInfo').innerHTML=INFO[s];
+}
+drawInv(0);seg('#invseg',function(b){drawInv(+b.getAttribute('data-s'))});
+
+})();
+</script>
+</body>
+</html>
